@@ -4,5 +4,8 @@
             "source": "/(.*)",
             "destination": "/main.py"
         }
-    ]
+    ],
+    "pip": {
+        "flags": "--no-cache-dir"
+    }
 }
