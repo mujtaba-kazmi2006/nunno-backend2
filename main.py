@@ -3,9 +3,10 @@ Nunno Finance - FastAPI Backend
 Main application entry point
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import os
@@ -15,6 +16,11 @@ from dotenv import load_dotenv
 load_dotenv(override=True)
 print("DEBUG: Successfully loaded environment variables")
 print("DEBUG: Starting Nunno Finance Backend...")
+
+# Import database and auth
+from database import init_db, get_db, User, Prediction
+from services.auth_service import create_access_token, verify_token, hash_password, verify_password
+from services.usage_service import can_user_search, log_usage, get_tier_limits
 
 # Import services
 from services.technical_analysis import TechnicalAnalysisService
@@ -36,6 +42,43 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Initialize database on startup
+@app.on_event("startup")
+async def startup_event():
+    init_db()
+    print("✅ Database initialized successfully!")
+
+# Security
+security = HTTPBearer(auto_error=False) # Allow optional auth
+
+def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security), db = Depends(get_db)):
+    """Get current authenticated user from JWT token"""
+    if not credentials:
+        raise HTTPException(status_code=401, detail="Authentication required")
+        
+    token = credentials.credentials
+    payload = verify_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    
+    user = db.query(User).filter(User.id == payload.get("user_id")).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    return user
+
+def get_optional_current_user(credentials: HTTPAuthorizationCredentials = Depends(security), db = Depends(get_db)):
+    """Get current user if authenticated, otherwise return None (Guest)"""
+    if not credentials:
+        return None
+        
+    token = credentials.credentials
+    payload = verify_token(token)
+    if not payload:
+        return None
+    
+    user = db.query(User).filter(User.id == payload.get("user_id")).first()
+    return user
 
 # Initialize services with error handling
 try:
@@ -63,6 +106,15 @@ except Exception as e:
     news_service = None
 
 # Request/Response Models
+class SignupRequest(BaseModel):
+    email: str
+    password: str
+    name: str
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
 class ChatRequest(BaseModel):
     message: str
     user_name: str = "User"
@@ -82,6 +134,82 @@ async def root():
         "service": "Nunno Finance API",
         "version": "1.0.0"
     }
+
+# ==================== AUTHENTICATION ENDPOINTS ====================
+
+@app.post("/api/auth/signup")
+async def signup(request: SignupRequest, db = Depends(get_db)):
+    """Register a new user"""
+    # Check if user exists
+    existing = db.query(User).filter(User.email == request.email).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
+    # Create user
+    user = User(
+        email=request.email,
+        password_hash=hash_password(request.password),
+        name=request.name,
+        tier="free",
+        tokens_remaining=1000
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    
+    # Create token
+    token = create_access_token({"user_id": str(user.id), "email": user.email})
+    
+    return {
+        "token": token,
+        "user": {
+            "id": str(user.id),
+            "email": user.email,
+            "name": user.name,
+            "tier": user.tier,
+            "tokens_remaining": user.tokens_remaining,
+            "searches_today": user.searches_today
+        }
+    }
+
+@app.post("/api/auth/login")
+async def login(request: LoginRequest, db = Depends(get_db)):
+    """Login existing user"""
+    user = db.query(User).filter(User.email == request.email).first()
+    if not user or not verify_password(request.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    
+    token = create_access_token({"user_id": str(user.id), "email": user.email})
+    
+    return {
+        "token": token,
+        "user": {
+            "id": str(user.id),
+            "email": user.email,
+            "name": user.name,
+            "tier": user.tier,
+            "tokens_remaining": user.tokens_remaining,
+            "searches_today": user.searches_today
+        }
+    }
+
+@app.get("/api/auth/me")
+async def get_me(current_user: User = Depends(get_current_user), db = Depends(get_db)):
+    """Get current user info"""
+    # Get tier limits
+    limits = get_tier_limits(current_user.tier)
+    
+    return {
+        "id": str(current_user.id),
+        "email": current_user.email,
+        "name": current_user.name,
+        "tier": current_user.tier,
+        "tokens_remaining": current_user.tokens_remaining,
+        "searches_today": current_user.searches_today,
+        "limits": limits
+    }
+
+# ==================== EXISTING ENDPOINTS ====================
 
 @app.get("/api/v1/technical/{ticker}")
 async def get_technical_analysis(ticker: str, interval: str = "15m"):

@@ -73,7 +73,7 @@ Rules:
         messages.append({"role": "user", "content": message})
         
         # Detect tools
-        tools_to_call = self._classify_intent_and_extract_entities(message)
+        tools_to_call = await self._classify_intent_and_extract_entities(message)
         tool_data = {}
         
         # Execute tool calls
@@ -142,7 +142,7 @@ Rules:
             
         # 1. Detect and run tools
         print(f"[CHAT] Classifying intent for: {message[:50]}...")
-        tools_to_call = self._classify_intent_and_extract_entities(message)
+        tools_to_call = await self._classify_intent_and_extract_entities(message)
         print(f"[CHAT] Tools detected: {tools_to_call}")
         tool_data = {}
         
@@ -193,7 +193,7 @@ Rules:
             stream = await self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                max_tokens=1500,
+                max_tokens=1200,  # Reduced from 1500 for faster responses
                 temperature=0.7,
                 stream=True,
                 extra_headers={
@@ -215,10 +215,10 @@ Rules:
                 error_msg = "🔑 Invalid API Key. Please check your OPENROUTER_API_KEY in the .env file and ensure it is correct."
             yield f"data: {json.dumps({'type': 'error', 'content': error_msg})}\n\n"
     
-    def _classify_intent_and_extract_entities(self, message: str) -> List[tuple]:
+    async def _classify_intent_and_extract_entities(self, message: str) -> List[tuple]:
         """
         Use keyword detection first, then LLM if needed for tool calling
-        This saves API credits by avoiding unnecessary calls for simple chat
+        Async version using AsyncOpenAI to prevent blocking
         """
         # First, try keyword-based detection (FREE!)
         fallback_tools = self._detect_tools_needed_fallback(message)
@@ -269,32 +269,23 @@ Rules:
             - "Should I buy PEPE?" -> {{"tools": [{{"name": "technical_analysis", "params": {{"ticker": "PEPEUSDT"}}}}, {{"name": "news", "params": {{"ticker": "PEPEUSDT"}}}}]}}
             """
             
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "https://nunno.finance",
-                "X-Title": "Nunno Finance Intent"
-            }
-            
-            payload = {
-                "model": "openai/gpt-4o-mini", # Fast model for routing
-                "messages": [
+            response = await self.client.chat.completions.create(
+                model="openai/gpt-4o-mini", # Fast model for routing
+                messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": message}
                 ],
-                "temperature": 0.0,
-                "max_tokens": 30,  # Reduced from 50
-                "response_format": {"type": "json_object"}
-            }
+                temperature=0.0,
+                max_tokens=30,
+                response_format={"type": "json_object"},
+                timeout=3.0,
+                extra_headers={
+                    "HTTP-Referer": "https://nunno.finance",
+                    "X-Title": "Nunno Finance Intent"
+                }
+            )
             
-            response = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=5)
-            if response.status_code != 200:
-                print(f"Intent detection failed: {response.text}")
-                # Return keyword results, filtering out the marker
-                return [t for t in fallback_tools if t[0] != "_needs_llm"]
-            
-            result = response.json()
-            content = result["choices"][0]["message"]["content"]
+            content = response.choices[0].message.content
             tool_plan = json.loads(content)
             
             tools = []
@@ -316,6 +307,16 @@ Rules:
         """Legacy keyword-based detection as fallback"""
         message_lower = message.lower()
         tools = []
+        
+        # FAST PATH: Skip tool detection for greetings and simple questions
+        greetings = ["hello", "hi", "hey", "good morning", "good afternoon", "good evening", "thanks", "thank you"]
+        simple_questions = ["how are you", "what can you do", "help", "who are you", "who made you", "who created you"]
+        
+        if any(greeting in message_lower for greeting in greetings) and len(message.split()) < 10:
+            return []  # No tools needed for greetings
+        
+        if any(q in message_lower for q in simple_questions):
+            return []  # No tools needed for simple questions
         
         # Check if this message likely needs analysis tools (even if we can't extract the coin)
         has_prediction_intent = any(w in message_lower for w in [
