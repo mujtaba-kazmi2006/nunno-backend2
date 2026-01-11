@@ -19,6 +19,7 @@ class ChatService:
     def __init__(self):
         self.api_key = os.getenv("OPENROUTER_API_KEY", "")
         self.model = os.getenv("AI_MODEL", "openai/gpt-4o-mini")
+        self.fallback_model = "openai/gpt-4o-mini"  # Small, efficient fallback
         self.base_url = "https://openrouter.ai/api/v1"
         
         # Initialize OpenAI Async Client for OpenRouter
@@ -135,43 +136,112 @@ Rules:
     ) -> AsyncGenerator[str, None]:
         """
         Stream chat responses for real-time display using AsyncOpenAI
+        Optimized to run tools in parallel and provide immediate feedback
         """
         if not self.api_key:
             yield f"data: {json.dumps({'response': '⚠️ OpenRouter API key not configured.'})}\n\n"
             return
             
-        # 1. Detect and run tools
+        # 1. Detect tools (fast keyword-based detection)
         print(f"[CHAT] Classifying intent for: {message[:50]}...")
         tools_to_call = await self._classify_intent_and_extract_entities(message)
         print(f"[CHAT] Tools detected: {tools_to_call}")
         tool_data = {}
         
-        # 2. Yield status and run tools
+        # 2. Execute tools in parallel with immediate status feedback
         if tools_to_call:
-            for tool_name, params in tools_to_call:
-                try:
-                    if tool_name == "technical_analysis":
-                        yield f"data: {json.dumps({'type': 'status', 'content': f'📊 Analyzing chart for {params.get("ticker", "market")}...'})}\n\n"
-                        tool_data["technical"] = self.technical_service.analyze(params["ticker"])
-                    elif tool_name == "tokenomics":
-                        coin_id = params.get("coin_id", "").lower()
-                        yield f"data: {json.dumps({'type': 'status', 'content': f'🪙 Checking tokenomics for {coin_id}...'})}\n\n"
-                        tool_data["tokenomics"] = self.tokenomics_service.analyze(coin_id)
-                    elif tool_name == "news":
-                        yield f"data: {json.dumps({'type': 'status', 'content': f'📰 Reading news for {params.get("ticker", "market")}...'})}\n\n"
-                        tool_data["news"] = self.news_service.get_news_sentiment(params["ticker"])
-                    elif tool_name == "web_research":
-                        if "url" in params:
-                            yield f"data: {json.dumps({'type': 'status', 'content': '🔗 Reading website content...'})}\n\n"
-                            tool_data["web_research"] = self.web_research_service.scrape_url(params["url"])
-                        else:
-                            yield f"data: {json.dumps({'type': 'status', 'content': f'🔍 Searching the web for \"{params.get("query", "info")}\"...'})}\n\n"
-                            tool_data["web_research"] = self.web_research_service.search_web(params["query"])
-                except Exception as e:
-                    print(f"Tool error: {e}")
+            # Yield initial status immediately
+            yield f"data: {json.dumps({'type': 'status', 'content': '🔍 Gathering data...'})}\n\n"
             
-            # Send tool data
-            yield f"data: {json.dumps({'type': 'data', 'tool_calls': [t[0] for t in tools_to_call], 'data_used': tool_data})}\n\n"
+            # Create async tasks for parallel execution
+            async def run_technical_analysis(params):
+                try:
+                    # Run in thread pool since it's synchronous
+                    return await asyncio.get_event_loop().run_in_executor(
+                        None, 
+                        self.technical_service.analyze, 
+                        params["ticker"]
+                    )
+                except Exception as e:
+                    print(f"Technical analysis error: {e}")
+                    return None
+            
+            async def run_tokenomics(params):
+                try:
+                    coin_id = params.get("coin_id", "").lower()
+                    return await asyncio.get_event_loop().run_in_executor(
+                        None,
+                        self.tokenomics_service.analyze,
+                        coin_id
+                    )
+                except Exception as e:
+                    print(f"Tokenomics error: {e}")
+                    return None
+            
+            async def run_news(params):
+                try:
+                    return await asyncio.get_event_loop().run_in_executor(
+                        None,
+                        self.news_service.get_news_sentiment,
+                        params["ticker"]
+                    )
+                except Exception as e:
+                    print(f"News error: {e}")
+                    return None
+            
+            async def run_web_research(params):
+                try:
+                    if "url" in params:
+                        return await asyncio.get_event_loop().run_in_executor(
+                            None,
+                            self.web_research_service.scrape_url,
+                            params["url"]
+                        )
+                    else:
+                        return await asyncio.get_event_loop().run_in_executor(
+                            None,
+                            self.web_research_service.search_web,
+                            params["query"]
+                        )
+                except Exception as e:
+                    print(f"Web research error: {e}")
+                    return None
+            
+            # Execute all tools in parallel
+            tasks = []
+            tool_names = []
+            for tool_name, params in tools_to_call:
+                tool_names.append(tool_name)
+                if tool_name == "technical_analysis":
+                    tasks.append(run_technical_analysis(params))
+                elif tool_name == "tokenomics":
+                    tasks.append(run_tokenomics(params))
+                elif tool_name == "news":
+                    tasks.append(run_news(params))
+                elif tool_name == "web_research":
+                    tasks.append(run_web_research(params))
+            
+            # Wait for all tools to complete in parallel
+            if tasks:
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                # Map results back to tool names
+                for i, (tool_name, params) in enumerate(tools_to_call):
+                    result = results[i]
+                    if result and not isinstance(result, Exception):
+                        # Map tool_name to the key used in tool_data
+                        if tool_name == "technical_analysis":
+                            tool_data["technical"] = result
+                        elif tool_name == "tokenomics":
+                            tool_data["tokenomics"] = result
+                        elif tool_name == "news":
+                            tool_data["news"] = result
+                        elif tool_name == "web_research":
+                            tool_data["web_research"] = result
+            
+            # Send tool data once all complete
+            if tool_data:
+                yield f"data: {json.dumps({'type': 'data', 'tool_calls': tool_names, 'data_used': tool_data})}\n\n"
 
         # 3. Build messages
         messages = [{"role": "system", "content": self._get_system_prompt(user_name, user_age)}]
@@ -188,12 +258,15 @@ Rules:
         else:
             messages.append({"role": "user", "content": message})
 
-        # 3. Stream from OpenRouter using AsyncOpenAI
+        # 4. Stream from OpenRouter using AsyncOpenAI with automatic fallback
+        current_model = self.model
+        retry_with_fallback = False
+        
         try:
             stream = await self.client.chat.completions.create(
-                model=self.model,
+                model=current_model,
                 messages=messages,
-                max_tokens=1200,  # Reduced from 1500 for faster responses
+                max_tokens=1200,
                 temperature=0.7,
                 stream=True,
                 extra_headers={
@@ -208,12 +281,51 @@ Rules:
                     yield f"data: {json.dumps({'type': 'text', 'content': content})}\n\n"
                                 
         except Exception as e:
-            error_msg = str(e)
-            if "402" in error_msg:
-                error_msg = "⚠️ Your OpenRouter account balance is too low for this request. Please top up at https://openrouter.ai/settings/credits or try a shorter message."
-            elif "401" in error_msg:
-                error_msg = "🔑 Invalid API Key. Please check your OPENROUTER_API_KEY in the .env file and ensure it is correct."
-            yield f"data: {json.dumps({'type': 'error', 'content': error_msg})}\n\n"
+            error_msg = str(e).lower()
+            
+            # Check for token-related errors
+            if any(keyword in error_msg for keyword in ["token", "context_length", "max_tokens", "too long", "402"]):
+                # Try fallback to smaller model
+                if current_model != self.fallback_model:
+                    retry_with_fallback = True
+                    yield f"data: {json.dumps({'type': 'status', 'content': f'⚡ Switching to faster model ({self.fallback_model})...'})}\n\n"
+                else:
+                    # Already using fallback, show error
+                    if "402" in str(e):
+                        error_msg = "⚠️ Your OpenRouter account balance is too low. Please top up at https://openrouter.ai/settings/credits"
+                    else:
+                        error_msg = "⚠️ Message too long even for compact model. Please try a shorter message."
+                    yield f"data: {json.dumps({'type': 'error', 'content': error_msg})}\n\n"
+            elif "401" in str(e):
+                error_msg = "🔑 Invalid API Key. Please check your OPENROUTER_API_KEY in the .env file."
+                yield f"data: {json.dumps({'type': 'error', 'content': error_msg})}\n\n"
+            else:
+                # Generic error
+                yield f"data: {json.dumps({'type': 'error', 'content': f'Error: {str(e)}'})}\n\n"
+        
+        # Retry with fallback model if needed
+        if retry_with_fallback:
+            try:
+                stream = await self.client.chat.completions.create(
+                    model=self.fallback_model,
+                    messages=messages,
+                    max_tokens=1000,  # Slightly reduced for fallback
+                    temperature=0.7,
+                    stream=True,
+                    extra_headers={
+                        "HTTP-Referer": "https://nunno.finance",
+                        "X-Title": "Nunno Finance"
+                    }
+                )
+                
+                async for chunk in stream:
+                    content = chunk.choices[0].delta.content
+                    if content:
+                        yield f"data: {json.dumps({'type': 'text', 'content': content})}\n\n"
+            
+            except Exception as fallback_error:
+                error_msg = f"⚠️ Both models failed. Error: {str(fallback_error)}"
+                yield f"data: {json.dumps({'type': 'error', 'content': error_msg})}\n\n"
     
     async def _classify_intent_and_extract_entities(self, message: str) -> List[tuple]:
         """
@@ -230,78 +342,24 @@ Rules:
         # If keyword detection found tools OR detected intent keywords, use LLM to refine
         # If no tools and no intent found by keywords, skip API call entirely (it's just chat)
         if not fallback_tools:
-            print("[INTENT] No tools needed, skipping API call")
+            # print("[INTENT] No tools needed, skipping API call")
             return []
         
-        if has_tools and not needs_llm:
-            print(f"[INTENT] Keywords successfully extracted tools: {fallback_tools}")
-            return fallback_tools
+        # SPEED OPTIMIZATION: Skip LLM refinement entirely. 
+        # Reliance on strict keyword definitions in _detect_tools_needed_fallback
+        # This makes tool detection instantaneous (0ms)
         
-        print(f"[INTENT] LLM refinement needed for message...")
+        # Filter out the "_needs_llm" marker if present, and just return what we have
+        final_tools = [t for t in fallback_tools if t[0] != "_needs_llm"]
         
-        try:
-            # Reduced ticker map for credit efficiency
-            ticker_map_str = "BTC: BTCUSDT, ETH: ETHUSDT, SOL: SOLUSDT, BNB: BNBUSDT, ADA: ADAUSDT, MATIC: MATICUSDT"
-            
-            system_prompt = f"""You are an intent classification system for a crypto AI.
-            Your job is to map user queries to tool calls.
-            
-            Available Tools:
-            1. technical_analysis(ticker): For price predictions, chart analysis, buy/sell signals, outlook.
-            2. tokenomics(coin_id): For fundamental analysis, supply, market cap, utility, "what is X?".
-            3. news(ticker): For market sentiment, "what's happening?", "why is it moving?".
-            4. web_research(query): For general questions, "who is X?", "latest news on Y", non-crypto topics.
-            5. web_research(url): For "read this link", "summarize this article".
-            
-            Rules:
-            - Extract tickers (e.g., "BTC" -> "BTCUSDT") and coin_ids (e.g., "Bitcoin" -> "bitcoin").
-            - Use the comprehensive ticker map: {ticker_map_str}
-            - For coins not in the map, construct ticker as: COINUSDT (e.g., "XYZ" -> "XYZUSDT")
-            - For coin_ids, use lowercase full name (e.g., "Cardano" -> "cardano", "Polygon" -> "polygon")
-            - Return JSON ONLY: {{"tools": [{{"name": "tool_name", "params": {{...}}}}]}}
-            - If no tool needed (general chat), return {{"tools": []}}
-            - Support multiple name formats: full name, ticker, common abbreviations
-            
-            Examples:
-            - "Predict Cardano" -> {{"tools": [{{"name": "technical_analysis", "params": {{"ticker": "ADAUSDT"}}}}]}}
-            - "What is Polygon?" -> {{"tools": [{{"name": "tokenomics", "params": {{"coin_id": "polygon"}}}}]}}
-            - "AVAX price prediction" -> {{"tools": [{{"name": "technical_analysis", "params": {{"ticker": "AVAXUSDT"}}}}]}}
-            - "Should I buy PEPE?" -> {{"tools": [{{"name": "technical_analysis", "params": {{"ticker": "PEPEUSDT"}}}}, {{"name": "news", "params": {{"ticker": "PEPEUSDT"}}}}]}}
-            """
-            
-            response = await self.client.chat.completions.create(
-                model="openai/gpt-4o-mini", # Fast model for routing
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": message}
-                ],
-                temperature=0.0,
-                max_tokens=30,
-                response_format={"type": "json_object"},
-                timeout=3.0,
-                extra_headers={
-                    "HTTP-Referer": "https://nunno.finance",
-                    "X-Title": "Nunno Finance Intent"
-                }
-            )
-            
-            content = response.choices[0].message.content
-            tool_plan = json.loads(content)
-            
-            tools = []
-            for tool in tool_plan.get("tools", []):
-                tools.append((tool["name"], tool["params"]))
-            
-            # If LLM didn't find tools but keywords did, use keyword results (excluding marker)
-            if not tools and has_tools:
-                return [t for t in fallback_tools if t[0] != "_needs_llm"]
-            
-            return tools
-
-        except Exception as e:
-            print(f"Intent routing error: {e}")
-            # Return keyword results, filtering out the marker
-            return [t for t in fallback_tools if t[0] != "_needs_llm"]
+        if final_tools:
+             print(f"[INTENT] Fast-path tools detected: {final_tools}")
+             return final_tools
+             
+        # If we only had the marker but no actual tools (e.g. "Predict future"), 
+        # we now skip tools to be fast, rather than asking LLM "what tool?".
+        # This means some ambiguous queries might become plain chat, which is acceptable for speed.
+        return []
 
     def _detect_tools_needed_fallback(self, message: str) -> List[tuple]:
         """Legacy keyword-based detection as fallback"""
@@ -309,25 +367,41 @@ Rules:
         tools = []
         
         # FAST PATH: Skip tool detection for greetings and simple questions
+        # FAST PATH: Skip tool detection for greetings and simple questions
         greetings = ["hello", "hi", "hey", "good morning", "good afternoon", "good evening", "thanks", "thank you"]
-        simple_questions = ["how are you", "what can you do", "help", "who are you", "who made you", "who created you"]
+        simple_questions = [
+            "how are you", "what can you do", "help", "who are you", "who made you", "who created you",
+            "what is your name", "tell me a joke", "you are", "are you", "what do you think", "can you"
+        ]
         
-        if any(greeting in message_lower for greeting in greetings) and len(message.split()) < 10:
-            return []  # No tools needed for greetings
-        
-        if any(q in message_lower for q in simple_questions):
-            return []  # No tools needed for simple questions
+        # Check for simple matches (exact or contained)
+        if len(message.split()) < 15:
+            if any(greeting == message_lower or message_lower.startswith(greeting + " ") for greeting in greetings):
+                return []
+            if any(q in message_lower for q in simple_questions):
+                return []
         
         # Check if this message likely needs analysis tools (even if we can't extract the coin)
         has_prediction_intent = any(w in message_lower for w in [
             "price", "chart", "predict", "prediction", "analysis", "analyze", 
             "outlook", "should i", "buy", "sell", "forecast", "trend"
         ])
-        has_tokenomics_intent = any(w in message_lower for w in [
-            "tokenomics", "supply", "market cap", "what is", "tell me about"
-        ])
+        
+        # Stricter tokenomics intent: "what is" requires extra context to be a crypto query
+        has_definite_tokenomics = any(w in message_lower for w in ["tokenomics", "supply", "market cap", "all time high", "ath"])
+        has_weak_tokenomics = any(w in message_lower for w in ["what is", "tell me about", "explain"])
+        
+        # Potential crypto context words to validate a weak intent
+        crypto_context = ["coin", "token", "crypto", "project", "protocol", "chain", "network", "defi", "investment", "price", "value"]
+        has_crypto_context = any(c in message_lower for c in crypto_context)
+        
+        # We scan for coins if there's any hint of tokenomics
+        should_scan_coins = has_definite_tokenomics or has_weak_tokenomics
+        # But we only fallback to LLM if the intent is strictly crypto-related or definite
+        has_tokenomics_intent = has_definite_tokenomics or (has_weak_tokenomics and has_crypto_context)
+
         has_news_intent = any(w in message_lower for w in [
-            "news", "sentiment", "what's happening", "why is it moving"
+            "news", "sentiment", "what's happening", "why is it moving", "market"
         ])
         
         # Comprehensive fallback ticker mapping (100+ coins)
@@ -473,7 +547,7 @@ Rules:
                     break
         
         # Try to extract coin for tokenomics
-        if has_tokenomics_intent:
+        if should_scan_coins:
              # CoinGecko ID mapping for tokenomics
              coingecko_map = {
                  "bitcoin": "bitcoin", "btc": "bitcoin", "ethereum": "ethereum", "eth": "ethereum",
@@ -551,19 +625,50 @@ Rules:
     def _format_tool_context(self, tool_data: Dict) -> str:
         """Minified context for token efficiency"""
         context_parts = []
+        
+        # Optimize Technical Analysis
         if "technical" in tool_data:
             tech = tool_data["technical"].copy()
-            for k in ["explanation", "signals", "data_source", "is_synthetic"]: tech.pop(k, None)
+            # Remove heavy fields not needed by LLM (it should use the pre-computed explanation)
+            for k in ["price_history", "beginner_notes", "data_source", "is_synthetic"]: 
+                tech.pop(k, None)
             context_parts.append(f"TECH:{json.dumps(tech)}")
+            
+        # Optimize Tokenomics
         if "tokenomics" in tool_data:
             t = tool_data["tokenomics"]
             if isinstance(t, dict):
+                # Keep only essential fields
                 s = {k: t.get(v) for k, v in {"name": "Token_Name", "price": "Current_Price", "rank": "Market_Cap_Rank"}.items()}
                 context_parts.append(f"TOKEN:{json.dumps(s)}")
+                
+        # Optimize News
         if "news" in tool_data:
             n = tool_data["news"].copy()
+            # Remove redundant text
             for k in ["explanation", "beginner_notes", "headlines"]: n.pop(k, None)
             context_parts.append(f"NEWS:{json.dumps(n)}")
+            
+        # Optimize Web Research (Fixes dict slicing bug)
         if "web_research" in tool_data:
-            context_parts.append(f"WEB:{json.dumps(tool_data['web_research'][:2])}")
+            wr = tool_data["web_research"]
+            if isinstance(wr, dict):
+                # Single page scrape result
+                summary = {
+                    "title": wr.get("title"),
+                    "url": wr.get("url"),
+                    "content": wr.get("content", "")[:800] + "..." # Truncate to save tokens
+                }
+                context_parts.append(f"WEB_PAGE:{json.dumps(summary)}")
+            elif isinstance(wr, list):
+                # Search results list
+                top_results = []
+                for res in wr[:2]: # Take top 2
+                    top_results.append({
+                        "title": res.get("title"),
+                        "href": res.get("href"),
+                        "body": res.get("body", "")[:150] # Truncate body
+                    })
+                context_parts.append(f"SEARCH_RESULTS:{json.dumps(top_results)}")
+                
         return "|".join(context_parts)

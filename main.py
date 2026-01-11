@@ -3,13 +3,16 @@ Nunno Finance - FastAPI Backend
 Main application entry point
 """
 
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
+from contextlib import asynccontextmanager
 import os
+import asyncio
+import json
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -27,11 +30,35 @@ from services.technical_analysis import TechnicalAnalysisService
 from services.chat_service import ChatService
 from services.tokenomics_service import TokenomicsService
 from services.news_service import NewsService
+from services.websocket_service import BinanceWebSocketService
+
+# Initialize WebSocket service
+websocket_service = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    global websocket_service
+    init_db()
+    print("✅ Database initialized successfully!")
+    
+    # Start WebSocket service
+    websocket_service = BinanceWebSocketService()
+    asyncio.create_task(websocket_service.start())
+    print("✅ WebSocket service started!")
+    
+    yield
+    
+    # Shutdown
+    if websocket_service:
+        await websocket_service.stop()
+        print("✅ WebSocket service stopped!")
 
 app = FastAPI(
     title="Nunno Finance API",
     description="Empathetic AI Financial Educator for Beginners",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 # CORS configuration for React frontend
@@ -42,12 +69,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Initialize database on startup
-@app.on_event("startup")
-async def startup_event():
-    init_db()
-    print("✅ Database initialized successfully!")
 
 # Security
 security = HTTPBearer(auto_error=False) # Allow optional auth
@@ -263,6 +284,44 @@ async def get_news(ticker: str):
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# ==================== WEBSOCKET ENDPOINT ====================
+
+@app.websocket("/ws/prices")
+async def websocket_prices(websocket: WebSocket):
+    """
+    WebSocket endpoint for real-time cryptocurrency prices
+    Streams live price updates from Binance
+    """
+    await websocket.accept()
+    
+    if not websocket_service:
+        await websocket.close(code=1011, reason="WebSocket service unavailable")
+        return
+    
+    try:
+        # Add client to service
+        await websocket_service.add_client(websocket)
+        
+        # Keep connection alive and handle incoming messages
+        while True:
+            try:
+                # Wait for messages from client (ping/pong or subscription requests)
+                data = await websocket.receive_text()
+                # Echo back to keep connection alive
+                await websocket.send_text(json.dumps({"type": "pong"}))
+            except WebSocketDisconnect:
+                break
+            except Exception as e:
+                print(f"WebSocket error: {e}")
+                break
+                
+    finally:
+        # Remove client from service
+        await websocket_service.remove_client(websocket)
+
+# ==================== REST ENDPOINTS ====================
+
 
 @app.get("/api/v1/price-history/{ticker}")
 async def get_price_history(ticker: str, timeframe: str = "24H"):

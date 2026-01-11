@@ -8,16 +8,13 @@ import os
 # Fix import path to find betterpredictormodule.py in the root folder (Nunno Streamlit)
 # Path structure: Nunno Streamlit/NunnoFinance/backend/services/technical_analysis.py
 # We need to go up 4 levels to reach Nunno Streamlit
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
-
-# Import the existing TradingAnalyzer class
+# Import the existing TradingAnalyzer class from the services package
+# This ensures we use the real module, not a mock
 try:
-    from betterpredictormodule import TradingAnalyzer
-except Exception as e:
-    # Fallback if path is still wrong or module specific issues
-    print(f"Warning: Could not import betterpredictormodule: {e}. Using mock.")
-    class TradingAnalyzer:
-        pass
+    from services.betterpredictormodule import TradingAnalyzer
+except ImportError:
+    # Fallback for local testing if run directly
+    from .betterpredictormodule import TradingAnalyzer
 
 class TechnicalAnalysisService:
     """
@@ -103,7 +100,34 @@ class TechnicalAnalysisService:
                 "explanation": explanation,
                 "data_source": data_source,
                 "is_synthetic": is_synthetic,
-                "price_history": price_history,  # NEW: Price data for charting
+                "price_history": price_history,  # Keep history for charts
+                "indicators": {
+                    "momentum": {
+                        "rsi_14": round(float(latest_row['RSI_14']), 2),
+                        "stoch_k": round(float(latest_row['Stoch_K']), 2),
+                        "stoch_d": round(float(latest_row['Stoch_D']), 2),
+                        "williams_r": round(float(latest_row['Williams_R']), 2),
+                        "roc_14": round(float(latest_row['ROC_14']), 2)
+                    },
+                    "trend": {
+                        "adx": round(float(latest_row['ADX']), 2),
+                        "di_plus": round(float(latest_row['DI_Plus']), 2),
+                        "di_minus": round(float(latest_row['DI_Minus']), 2),
+                        "macd": round(float(latest_row['MACD']), 2),
+                        "macd_signal": round(float(latest_row['MACD_Signal']), 2),
+                        "macd_hist": round(float(latest_row['MACD_Histogram']), 2),
+                        "ema_50": round(float(latest_row['EMA_50']), 4)
+                    },
+                    "volatility": {
+                        "atr_percent": round(float(latest_row['ATR_Percent']), 2),
+                        "bb_width": round(float(latest_row['BB_Width']), 2),
+                        "bb_position": round(float(latest_row['BB_Position']), 2)
+                    },
+                    "volume": {
+                        "volume_ratio": round(float(latest_row['Volume_Ratio']), 2),
+                        "cmf": round(float(latest_row['CMF']), 3)
+                    }
+                },
                 "key_levels": {
                     "support": float(latest_row['S1']),
                     "resistance": float(latest_row['R1']),
@@ -115,8 +139,9 @@ class TechnicalAnalysisService:
                     "bullish_count": len(confluences['bullish']),
                     "bearish_count": len(confluences['bearish']),
                     "neutral_count": len(confluences['neutral']),
-                    "bullish_signals": [self._format_confluence(c) for c in confluences['bullish'][:3]],
-                    "bearish_signals": [self._format_confluence(c) for c in confluences['bearish'][:3]]
+                    "bullish_signals": [self._format_confluence(c) for c in confluences['bullish']],  # All signals
+                    "bearish_signals": [self._format_confluence(c) for c in confluences['bearish']],  # All signals
+                    "neutral_signals": [self._format_confluence(c) for c in confluences['neutral']]   # All signals
                 },
                 "beginner_notes": self._get_beginner_notes(rsi, macd, latest_row)
             }
