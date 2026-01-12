@@ -44,6 +44,12 @@ class TechnicalAnalysisService:
             confluences, latest_row = self.analyzer.generate_comprehensive_analysis(df)
             bias, strength = self.analyzer.calculate_confluence_strength(confluences)
             
+            # Get enhanced analysis features
+            market_regime = self.analyzer.classify_market_regime(df, latest_row)
+            trend_strength = self.analyzer.calculate_trend_strength(latest_row)
+            volume_profile = self.analyzer.analyze_volume_profile(df, latest_row)
+            reasoning_chain = self.analyzer.build_reasoning_chain(df, latest_row, confluences, bias, strength)
+            
             # Check if data is synthetic
             data_source = df.attrs.get('data_source', 'Live Market Data')
             is_synthetic = 'Synthetic' in data_source
@@ -74,7 +80,7 @@ class TechnicalAnalysisService:
             
             # Create beginner-friendly explanation
             explanation = self._create_beginner_explanation(
-                ticker, bias_simple, rsi, current_price, latest_row, confluences
+                ticker, bias_simple, rsi, current_price, latest_row, confluences, market_regime
             )
             
             # Prepare price history for charting (last 50 candles)
@@ -100,6 +106,10 @@ class TechnicalAnalysisService:
                 "explanation": explanation,
                 "data_source": data_source,
                 "is_synthetic": is_synthetic,
+                "market_regime": market_regime,
+                "trend_strength": trend_strength,
+                "volume_profile": volume_profile,
+                "reasoning_chain": reasoning_chain,
                 "price_history": price_history,  # Keep history for charts
                 "indicators": {
                     "momentum": {
@@ -155,13 +165,16 @@ class TechnicalAnalysisService:
                 "message": "Unable to fetch analysis. Please try again."
             }
     
-    def _create_beginner_explanation(self, ticker, bias, rsi, price, row, confluences):
+    def _create_beginner_explanation(self, ticker, bias, rsi, price, row, confluences, market_regime):
         """Create a simple, beginner-friendly explanation"""
         
         explanations = []
         
         # Price context
         explanations.append(f"{ticker} is currently trading at ${price:.2f}.")
+        
+        # Market regime context (NEW)
+        explanations.append(f"The market is in **{market_regime['regime']}** mode. {market_regime['description']}")
         
         # Bias explanation
         if bias == "bullish":

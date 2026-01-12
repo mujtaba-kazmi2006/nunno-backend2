@@ -911,6 +911,229 @@ class TradingAnalyzer:
         else:
             return "Mixed/Neutral", max(bullish_score, bearish_score) / total_score * 100
     
+    def classify_market_regime(self, df, latest_row):
+        """Classify the current market regime for context"""
+        adx = latest_row['ADX']
+        atr_percent = latest_row['ATR_Percent']
+        bb_width = latest_row['BB_Width']
+        price = latest_row['Close']
+        ema_50 = latest_row['EMA_50']
+        
+        # Check EMA alignment
+        ema_bullish = latest_row['EMA_9'] > latest_row['EMA_21'] > latest_row['EMA_50']
+        ema_bearish = latest_row['EMA_9'] < latest_row['EMA_21'] < latest_row['EMA_50']
+        
+        # Determine regime
+        if adx > 25:
+            if price > ema_50 and ema_bullish:
+                regime = "Trending Bull"
+                confidence = min(100, (adx / 50) * 100)
+                description = "Strong uptrend with clear directional momentum"
+            elif price < ema_50 and ema_bearish:
+                regime = "Trending Bear"
+                confidence = min(100, (adx / 50) * 100)
+                description = "Strong downtrend with clear directional momentum"
+            else:
+                regime = "Trending Mixed"
+                confidence = (adx / 50) * 70
+                description = "Trending but with conflicting signals"
+        elif adx < 20 and bb_width < 2:
+            regime = "Ranging/Consolidation"
+            confidence = 80
+            description = "Low volatility, sideways price action, potential breakout setup"
+        elif atr_percent > 3 or bb_width > 8:
+            regime = "Volatile"
+            confidence = min(100, (atr_percent / 5) * 100)
+            description = "High volatility environment, use caution with position sizing"
+        else:
+            regime = "Transitional"
+            confidence = 50
+            description = "Market in transition between regimes"
+        
+        return {
+            "regime": regime,
+            "confidence": round(confidence, 1),
+            "description": description,
+            "metrics": {
+                "adx": round(adx, 1),
+                "atr_percent": round(atr_percent, 2),
+                "bb_width": round(bb_width, 2)
+            }
+        }
+    
+    def calculate_trend_strength(self, latest_row):
+        """Calculate trend strength score (0-100)"""
+        score = 0
+        components = {}
+        
+        # ADX Component (0-50 points)
+        adx = latest_row['ADX']
+        adx_score = min(50, (adx / 50) * 50)
+        score += adx_score
+        components['adx'] = round(adx_score, 1)
+        
+        # EMA Alignment Component (0-30 points)
+        ema_9 = latest_row['EMA_9']
+        ema_21 = latest_row['EMA_21']
+        ema_50 = latest_row['EMA_50']
+        
+        if ema_9 > ema_21 > ema_50:
+            ema_score = 30  # Perfect bullish alignment
+        elif ema_9 < ema_21 < ema_50:
+            ema_score = 30  # Perfect bearish alignment
+        elif ema_9 > ema_21 or ema_21 > ema_50:
+            ema_score = 15  # Partial alignment
+        else:
+            ema_score = 0  # No alignment
+        
+        score += ema_score
+        components['ema_alignment'] = round(ema_score, 1)
+        
+        # Momentum Consistency Component (0-20 points)
+        rsi = latest_row['RSI_14']
+        macd = latest_row['MACD']
+        macd_signal = latest_row['MACD_Signal']
+        stoch_k = latest_row['Stoch_K']
+        
+        momentum_signals = 0
+        if rsi > 50 and macd > macd_signal and stoch_k > 50:
+            momentum_signals = 3  # All bullish
+        elif rsi < 50 and macd < macd_signal and stoch_k < 50:
+            momentum_signals = 3  # All bearish
+        elif (rsi > 50 and macd > macd_signal) or (rsi < 50 and macd < macd_signal):
+            momentum_signals = 2  # Partial agreement
+        else:
+            momentum_signals = 1  # Mixed
+        
+        momentum_score = (momentum_signals / 3) * 20
+        score += momentum_score
+        components['momentum_consistency'] = round(momentum_score, 1)
+        
+        # Determine level
+        if score >= 70:
+            level = "Very Strong"
+        elif score >= 50:
+            level = "Strong"
+        elif score >= 30:
+            level = "Moderate"
+        else:
+            level = "Weak"
+        
+        return {
+            "score": round(score, 1),
+            "level": level,
+            "components": components
+        }
+    
+    def analyze_volume_profile(self, df, latest_row):
+        """Analyze volume patterns for accumulation/distribution"""
+        cmf = latest_row['CMF']
+        volume_ratio = latest_row['Volume_Ratio']
+        
+        # Get recent price action (last 5 candles)
+        recent_df = df.tail(5)
+        price_change = ((recent_df['Close'].iloc[-1] - recent_df['Close'].iloc[0]) / recent_df['Close'].iloc[0]) * 100
+        
+        # Determine profile
+        if cmf > 0.2 and volume_ratio > 1.2 and price_change > 0:
+            profile = "Accumulation"
+            strength = "Strong" if cmf > 0.3 else "Moderate"
+            description = "Smart money buying, volume supporting upward price movement"
+        elif cmf < -0.2 and volume_ratio > 1.2 and price_change < 0:
+            profile = "Distribution"
+            strength = "Strong" if cmf < -0.3 else "Moderate"
+            description = "Smart money selling, volume supporting downward price movement"
+        elif volume_ratio > 1.5:
+            profile = "High Activity"
+            strength = "Strong"
+            description = "Elevated volume but mixed signals, potential volatility"
+        elif volume_ratio < 0.7:
+            profile = "Low Activity"
+            strength = "Weak"
+            description = "Below average volume, moves may lack conviction"
+        else:
+            profile = "Neutral"
+            strength = "Moderate"
+            description = "Balanced volume, no clear accumulation or distribution"
+        
+        return {
+            "profile": profile,
+            "strength": strength,
+            "description": description,
+            "indicators": {
+                "cmf": round(cmf, 3),
+                "volume_ratio": round(volume_ratio, 2),
+                "price_change_5d": round(price_change, 2)
+            }
+        }
+    
+    def build_reasoning_chain(self, df, latest_row, confluences, bias, strength):
+        """Build step-by-step reasoning chain showing how bias was determined"""
+        chain = []
+        
+        # Step 1: Market Regime
+        regime_data = self.classify_market_regime(df, latest_row)
+        chain.append({
+            "step": 1,
+            "category": "Market Regime",
+            "finding": f"Market is in {regime_data['regime']} mode",
+            "impact": regime_data['description']
+        })
+        
+        # Step 2: Trend Strength
+        trend_data = self.calculate_trend_strength(latest_row)
+        chain.append({
+            "step": 2,
+            "category": "Trend Strength",
+            "finding": f"Trend strength is {trend_data['level']} ({trend_data['score']}/100)",
+            "impact": f"ADX at {trend_data['components']['adx']}, EMA alignment contributes {trend_data['components']['ema_alignment']} points"
+        })
+        
+        # Step 3: Volume Confirmation
+        volume_data = self.analyze_volume_profile(df, latest_row)
+        chain.append({
+            "step": 3,
+            "category": "Volume Profile",
+            "finding": f"Volume shows {volume_data['profile']} pattern",
+            "impact": volume_data['description']
+        })
+        
+        # Step 4: Key Confluences (top 3-5)
+        bullish_count = len(confluences['bullish'])
+        bearish_count = len(confluences['bearish'])
+        
+        # Get strongest signals
+        all_signals = []
+        for conf in confluences['bullish'][:3]:
+            all_signals.append(f"✅ {conf['indicator']}: {conf['condition']}")
+        for conf in confluences['bearish'][:3]:
+            all_signals.append(f"❌ {conf['indicator']}: {conf['condition']}")
+        
+        chain.append({
+            "step": 4,
+            "category": "Signal Confluence",
+            "finding": f"{bullish_count} bullish vs {bearish_count} bearish signals detected",
+            "impact": " | ".join(all_signals[:5])  # Top 5 signals
+        })
+        
+        # Step 5: Final Bias Determination
+        bias_explanation = ""
+        if "Bullish" in bias:
+            bias_explanation = f"Bullish bias confirmed with {strength:.1f}% confidence due to confluence of upward signals"
+        elif "Bearish" in bias:
+            bias_explanation = f"Bearish bias confirmed with {strength:.1f}% confidence due to confluence of downward signals"
+        else:
+            bias_explanation = f"Mixed/Neutral bias with {strength:.1f}% confidence - conflicting signals suggest caution"
+        
+        chain.append({
+            "step": 5,
+            "category": "Final Determination",
+            "finding": bias,
+            "impact": bias_explanation
+        })
+        
+        return chain
+    
     def display_analysis(self, symbol, timeframe, confluences, latest_row):
         """Display comprehensive analysis results (unchanged from original)"""
         print(f"\n{'='*80}")
