@@ -62,7 +62,7 @@ class BinanceWebSocketService:
         # Build stream URL for multiple symbols
         # Format: wss://stream.binance.com:9443/stream?streams=btcusdt@ticker/ethusdt@ticker
         streams = '/'.join([f"{symbol.lower()}@ticker" for symbol in self.symbols])
-        url = f"wss://stream.binance.com:9443/stream?streams={streams}"
+        url = f"wss://stream.binance.us:9443/stream?streams={streams}"
         
         logger.info(f"Connecting to Binance WebSocket: {url}")
         
