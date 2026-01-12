@@ -5,7 +5,11 @@ News and Sentiment Service
 import requests
 import os
 from datetime import datetime
-from duckduckgo_search import DDGS
+try:
+    from duckduckgo_search import DDGS
+except ImportError:
+    DDGS = None
+    print("Warning: duckduckgo_search not installed. News search will be limited.")
 
 class NewsService:
     """
@@ -133,8 +137,12 @@ class NewsService:
             # Clean ticker for better search
             search_term = ticker.replace("USDT", "").replace("USD", "") + " crypto news"
             
-            with DDGS() as ddgs:
-                results = list(ddgs.text(search_term, max_results=5))
+            if DDGS:
+                with DDGS() as ddgs:
+                    results = list(ddgs.text(search_term, max_results=5))
+            else:
+                print("DDGS not initialized, skipping search")
+                results = []
                 
             headlines = [
                 {
