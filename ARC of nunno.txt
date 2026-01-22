@@ -1,0 +1,41 @@
+Nunno Finance: Full System Architecture
+Nunno Finance is not just an AI chatbot; it is a Proprietary Financial Intelligence Engine designed to educate beginners while providing professional-grade data analysis.
+
+Core Philosophical Difference
+While most AI apps are simple "GPT Wrappers" (they just send your question to ChatGPT), Nunno Finance uses a Service-Oriented Architecture (SOA). Before the AI even speaks, Nunno's "sub-brains" (services) gather raw data from the real world, synthesize it, and then hand it to the AI for final translation into beginner-friendly terms.
+
+1. The Intelligence Layer (Service-Oriented)
+The system is powered by specialized backend services that run in parallel whenever you ask a question:
+
+🧠 Historical Memory (Event-Based Analysis)
+What it is: A proprietary database (
+crypto_prediction.db
+) containing raw technical snapshots of every major financial event from the last 5 years.
+Why it's powerful: It allows Nunno to compare current market conditions to past historical patterns (e.g., "The current RSI setup is 90% similar to the 2020 COVID-19 bounce").
+Status: Fully Integrated. Nunno uses this to provide "Expert Context" far beyond what generic AI models know.
+📊 Technical Analysis Service
+Orchestrates 40+ technical indicators (RSI, MACD, Bollinger Bands, Ichimoku Clouds).
+Calculates "Market Regimes" (Trending, Ranging, Volatile) and "Trend Strength" in real-time.
+📑 Tokenomics Service
+Deep-dives into coin supply, market cap rankings, and inflation schedules.
+Converts complex metrics into ROI simulations for beginners.
+🌐 Web Research & News Service
+Scrapes real-time market sentiment from News headlines and search engines.
+Applies sentiment analysis to determine if news is "FUD" (Fear, Uncertainty, Doubt) or "Bullish".
+2. The Orchestration Layer (The "Nunno" Persona)
+When a message comes in:
+
+Intent Classification: Nunno determines which tools are needed (e.g., "User is asking about Bitcoin price -> need TA and Historical Events").
+Parallel Execution: All required services run simultaneously to fetch fresh data.
+Synthesis: The data is minified and fed into the AI LLM (OpenRouter/Claude).
+Empathy translation: The LLM takes the raw data and explains it using analogies, simple terms, and "Beginner's Notes".
+3. The Live Data Stream (WebSocket)
+Nunno's frontend isn't static. It maintains a persistent WebSocket connection directly to the Binance exchange, providing 1:1 real-time price updates and live charts without the user needing to refresh.
+
+4. Scalable Infrastructure
+Database: SQLite for blazing-fast local queries of historical events.
+Backend: FastAPI (Python) for high-performance streaming responses.
+Frontend: Vite/React for a premium, responsive UI experience.
+IMPORTANT
+
+This architecture ensures that Nunno's advice is always grounded in Live Data and Historical Fact, rather than just "AI guesswork".--

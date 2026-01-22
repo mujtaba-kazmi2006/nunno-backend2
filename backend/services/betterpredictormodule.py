@@ -864,7 +864,7 @@ class TradingAnalyzer:
         return confluences
     
     def generate_comprehensive_analysis(self, df):
-        """Generate comprehensive market analysis (unchanged from original)"""
+        """Generate comprehensive market analysis with enhanced directional bias"""
         latest_row = df.iloc[-1]
         
         # Gather all confluences
@@ -874,42 +874,305 @@ class TradingAnalyzer:
         volume_conf = self.analyze_volume_confluence(latest_row)
         price_action_conf = self.analyze_price_action(latest_row)
         
+        # NEW: Enhanced analysis components
+        divergence_conf = self.detect_momentum_divergence(df, latest_row)
+        pattern_conf = self.analyze_price_action_patterns(df, latest_row)
+        
+        # Ensure all confluence dictionaries have 'neutral' key
+        for conf_dict in [divergence_conf, pattern_conf]:
+            if 'neutral' not in conf_dict:
+                conf_dict['neutral'] = []
+        
         # Combine all confluences
         all_confluences = {
             'bullish': (momentum_conf['bullish'] + trend_conf['bullish'] + 
                        volatility_conf['bullish'] + volume_conf['bullish'] + 
-                       price_action_conf['bullish']),
+                       price_action_conf['bullish'] + divergence_conf['bullish'] + 
+                       pattern_conf['bullish']),
             'bearish': (momentum_conf['bearish'] + trend_conf['bearish'] + 
                        volatility_conf['bearish'] + volume_conf['bearish'] + 
-                       price_action_conf['bearish']),
+                       price_action_conf['bearish'] + divergence_conf['bearish'] + 
+                       pattern_conf['bearish']),
             'neutral': (momentum_conf['neutral'] + trend_conf['neutral'] + 
                        volatility_conf['neutral'] + volume_conf['neutral'] + 
-                       price_action_conf['neutral'])
+                       price_action_conf['neutral'] + divergence_conf['neutral'] + 
+                       pattern_conf['neutral'])
         }
+        
+        # NEW: Add advanced trend strength to confluences
+        advanced_trend = self.calculate_advanced_trend_strength(df, latest_row)
+        all_confluences['advanced_trend'] = advanced_trend
         
         return all_confluences, latest_row
     
     def calculate_confluence_strength(self, confluences):
-        """Calculate overall confluence strength (unchanged from original)"""
-        strength_weights = {'Strong': 3, 'Medium': 2, 'Low': 1}
+        """Calculate overall confluence strength with enhanced directional bias"""
+        # Enhanced indicator weights based on predictive power
+        indicator_weights = {
+            'MACD': 1.5,
+            'RSI (14)': 1.3,
+            'Stochastic': 1.2,
+            'EMA Alignment': 1.4,
+            'Price vs EMA 21': 1.1,
+            'ADX Trend Strength': 1.3,
+            'Bollinger Bands': 1.0,
+            'Volume': 0.8,  # Lower weight as volume is confirmatory
+            'Price Action': 1.2,
+            'Williams %R': 1.1,
+            'ML Support Zone': 1.6,  # ML-learned levels have higher weight
+            'ML Resistance Zone': 1.6,  # ML-learned levels have higher weight
+        }
         
-        bullish_score = sum(strength_weights.get(conf['strength'], 1) for conf in confluences['bullish'])
-        bearish_score = sum(strength_weights.get(conf['strength'], 1) for conf in confluences['bearish'])
-        neutral_score = sum(strength_weights.get(conf['strength'], 1) for conf in confluences['neutral'])
+        # Calculate weighted scores
+        bullish_score = 0
+        bearish_score = 0
+        neutral_score = 0
+        
+        for conf in confluences['bullish']:
+            base_weight = {'Strong': 3, 'Medium': 2, 'Low': 1}[conf['strength']]
+            indicator_weight = indicator_weights.get(conf['indicator'], 1.0)
+            bullish_score += base_weight * indicator_weight
+        
+        for conf in confluences['bearish']:
+            base_weight = {'Strong': 3, 'Medium': 2, 'Low': 1}[conf['strength']]
+            indicator_weight = indicator_weights.get(conf['indicator'], 1.0)
+            bearish_score += base_weight * indicator_weight
+        
+        for conf in confluences['neutral']:
+            base_weight = {'Strong': 3, 'Medium': 2, 'Low': 1}[conf['strength']]
+            indicator_weight = indicator_weights.get(conf['indicator'], 1.0)
+            neutral_score += base_weight * indicator_weight
         
         total_score = bullish_score + bearish_score + neutral_score
         
         if total_score == 0:
             return "No Clear Signal", 0
         
-        if bullish_score > bearish_score and bullish_score >= self.confluence_threshold:
-            bias_strength = (bullish_score / total_score) * 100
+        # Calculate directional bias with enhanced scoring
+        bullish_percentage = (bullish_score / total_score) * 100 if total_score > 0 else 0
+        bearish_percentage = (bearish_score / total_score) * 100 if total_score > 0 else 0
+        
+        # Enhanced threshold based on weighted signals
+        enhanced_threshold = self.confluence_threshold * 1.2  # Increased threshold for clearer signals
+        
+        # Calculate difference to determine if there's a clear directional bias
+        difference = abs(bullish_score - bearish_score)
+        total_directional = bullish_score + bearish_score
+        
+        if total_directional == 0:
+            return "No Clear Signal", 0
+        
+        # Require a meaningful difference to establish bias
+        min_difference_for_bias = total_directional * 0.20  # Need 20% difference to claim bias
+        
+        if bullish_score > bearish_score and bullish_score >= enhanced_threshold and difference >= min_difference_for_bias:
+            # Calculate confidence based on dominance ratio
+            dominance_ratio = bullish_score / max(bearish_score, 1)
+            # Apply dominance boost but cap it to prevent unrealistic confidence
+            base_strength = (bullish_score / total_score) * 100
+            dominance_boost = min(25, (dominance_ratio - 1) * 15)  # Max 25% boost
+            bias_strength = min(90, base_strength + dominance_boost)
             return "Bullish Bias", bias_strength
-        elif bearish_score > bullish_score and bearish_score >= self.confluence_threshold:
-            bias_strength = (bearish_score / total_score) * 100
+        elif bearish_score > bullish_score and bearish_score >= enhanced_threshold and difference >= min_difference_for_bias:
+            # Calculate confidence based on dominance ratio
+            dominance_ratio = bearish_score / max(bullish_score, 1)
+            # Apply dominance boost but cap it to prevent unrealistic confidence
+            base_strength = (bearish_score / total_score) * 100
+            dominance_boost = min(25, (dominance_ratio - 1) * 15)  # Max 25% boost
+            bias_strength = min(90, base_strength + dominance_boost)
             return "Bearish Bias", bias_strength
         else:
-            return "Mixed/Neutral", max(bullish_score, bearish_score) / total_score * 100
+            # Mixed signal with calculated strength
+            dominant_side = max(bullish_score, bearish_score)
+            # Reduce confidence significantly for mixed signals
+            bias_strength = (dominant_side / total_score) * 50 if total_score > 0 else 0  # Cap at 50% for mixed
+            return "Mixed/Neutral", bias_strength
+    
+    def detect_momentum_divergence(self, df, latest_row):
+        """Detect momentum divergence between price and oscillators"""
+        divergences = {'bullish': [], 'bearish': []}
+        
+        # Calculate recent highs/lows for price
+        recent_highs = df['High'].rolling(window=20).max()
+        recent_lows = df['Low'].rolling(window=20).min()
+        
+        # Get last 5 values for comparison
+        last_5_highs = recent_highs.tail(5)
+        last_5_lows = recent_lows.tail(5)
+        last_5_rsi = df['RSI_14'].tail(5)
+        last_5_macd = df['MACD'].tail(5)
+        
+        # Bullish divergence: Price makes lower low, RSI/MACD makes higher low
+        if (last_5_lows.iloc[-1] < last_5_lows.iloc[-3] and 
+            last_5_rsi.iloc[-1] > last_5_rsi.iloc[-3]):
+            divergences['bullish'].append({
+                'indicator': 'RSI Divergence',
+                'condition': 'Price made lower low but RSI made higher low',
+                'implication': 'Potential bullish reversal signal',
+                'strength': 'Strong',
+                'timeframe': 'Short-term'
+            })
+        
+        if (last_5_lows.iloc[-1] < last_5_lows.iloc[-3] and 
+            last_5_macd.iloc[-1] > last_5_macd.iloc[-3]):
+            divergences['bullish'].append({
+                'indicator': 'MACD Divergence',
+                'condition': 'Price made lower low but MACD made higher low',
+                'implication': 'Potential bullish reversal signal',
+                'strength': 'Strong',
+                'timeframe': 'Short-term'
+            })
+        
+        # Bearish divergence: Price makes higher high, RSI/MACD makes lower high
+        if (last_5_highs.iloc[-1] > last_5_highs.iloc[-3] and 
+            last_5_rsi.iloc[-1] < last_5_rsi.iloc[-3]):
+            divergences['bearish'].append({
+                'indicator': 'RSI Divergence',
+                'condition': 'Price made higher high but RSI made lower high',
+                'implication': 'Potential bearish reversal signal',
+                'strength': 'Strong',
+                'timeframe': 'Short-term'
+            })
+        
+        if (last_5_highs.iloc[-1] > last_5_highs.iloc[-3] and 
+            last_5_macd.iloc[-1] < last_5_macd.iloc[-3]):
+            divergences['bearish'].append({
+                'indicator': 'MACD Divergence',
+                'condition': 'Price made higher high but MACD made lower high',
+                'implication': 'Potential bearish reversal signal',
+                'strength': 'Strong',
+                'timeframe': 'Short-term'
+            })
+        
+        return divergences
+    
+    def analyze_price_action_patterns(self, df, latest_row):
+        """Analyze specific price action patterns for directional bias"""
+        patterns = {'bullish': [], 'bearish': []}
+        
+        # Get last few candles
+        last_candles = df.tail(10)
+        
+        # Look for engulfing patterns
+        if len(last_candles) >= 2:
+            prev_candle = last_candles.iloc[-2]
+            curr_candle = last_candles.iloc[-1]
+            
+            # Bullish engulfing: previous red candle completely engulfed by green candle
+            if (prev_candle['Close'] < prev_candle['Open'] and  # Previous red candle
+                curr_candle['Close'] > curr_candle['Open'] and  # Current green candle
+                curr_candle['Open'] < prev_candle['Close'] and  # Opens below previous close
+                curr_candle['Close'] > prev_candle['Open']):   # Closes above previous open
+                patterns['bullish'].append({
+                    'indicator': 'Engulfing Pattern',
+                    'condition': 'Bullish engulfing pattern detected',
+                    'implication': 'Strong bullish reversal signal',
+                    'strength': 'Strong',
+                    'timeframe': 'Short-term'
+                })
+            
+            # Bearish engulfing: previous green candle completely engulfed by red candle
+            if (prev_candle['Close'] > prev_candle['Open'] and  # Previous green candle
+                curr_candle['Close'] < curr_candle['Open'] and  # Current red candle
+                curr_candle['Open'] > prev_candle['Close'] and  # Opens above previous close
+                curr_candle['Close'] < prev_candle['Open']):   # Closes below previous open
+                patterns['bearish'].append({
+                    'indicator': 'Engulfing Pattern',
+                    'condition': 'Bearish engulfing pattern detected',
+                    'implication': 'Strong bearish reversal signal',
+                    'strength': 'Strong',
+                    'timeframe': 'Short-term'
+                })
+        
+        # Look for pin bars (potential reversal signals)
+        for i in range(1, len(last_candles)):
+            candle = last_candles.iloc[-i]
+            body_size = abs(candle['Close'] - candle['Open'])
+            total_range = candle['High'] - candle['Low']
+            
+            if total_range > 0:
+                upper_wick = candle['High'] - max(candle['Open'], candle['Close'])
+                lower_wick = min(candle['Open'], candle['Close']) - candle['Low']
+                
+                # Bullish pin bar (hammer): long lower wick, small body, little or no upper wick
+                if lower_wick > body_size * 2 and upper_wick < body_size:
+                    patterns['bullish'].append({
+                        'indicator': 'Pin Bar',
+                        'condition': f'Bullish hammer pattern at ${candle["Low"]:.4f}',
+                        'implication': 'Potential bullish reversal at support',
+                        'strength': 'Medium',
+                        'timeframe': 'Short-term'
+                    })
+                
+                # Bearish pin bar (shooting star): long upper wick, small body, little or no lower wick
+                elif upper_wick > body_size * 2 and lower_wick < body_size:
+                    patterns['bearish'].append({
+                        'indicator': 'Pin Bar',
+                        'condition': f'Bearish shooting star pattern at ${candle["High"]:.4f}',
+                        'implication': 'Potential bearish reversal at resistance',
+                        'strength': 'Medium',
+                        'timeframe': 'Short-term'
+                    })
+        
+        return patterns
+    
+    def calculate_advanced_trend_strength(self, df, latest_row):
+        """Calculate advanced trend strength considering multiple factors"""
+        # EMA alignment strength
+        ema_9 = latest_row['EMA_9']
+        ema_21 = latest_row['EMA_21']
+        ema_50 = latest_row['EMA_50']
+        
+        ema_alignment_score = 0
+        if ema_9 > ema_21 > ema_50:
+            ema_alignment_score = 30  # Perfect bullish alignment
+        elif ema_9 < ema_21 < ema_50:
+            ema_alignment_score = 30  # Perfect bearish alignment
+        elif ema_9 > ema_21 or ema_21 > ema_50:
+            ema_alignment_score = 15  # Partial alignment
+        else:
+            ema_alignment_score = 0  # No alignment
+        
+        # ADX strength (trend strength)
+        adx = latest_row['ADX']
+        adx_score = min(30, max(0, (adx - 20) * 0.75))  # Only score if ADX > 20
+        
+        # Directional strength (DI+ vs DI-)
+        di_plus = latest_row['DI_Plus']
+        di_minus = latest_row['DI_Minus']
+        di_diff = abs(di_plus - di_minus)
+        di_score = min(20, di_diff * 0.2)
+        
+        # Price vs EMAs (position in trend)
+        price = latest_row['Close']
+        ema_20 = latest_row['SMA_20']
+        price_position_score = min(10, abs((price - ema_20) / ema_20) * 500)  # How far from trend
+        
+        # Momentum (MACD histogram growth)
+        macd_hist = latest_row['MACD_Histogram']
+        if len(df) > 1:
+            prev_macd_hist = df['MACD_Histogram'].iloc[-2]
+            hist_growth = abs(macd_hist - prev_macd_hist)
+            momentum_score = min(10, hist_growth * 100)
+        else:
+            momentum_score = 5
+        
+        total_score = ema_alignment_score + adx_score + di_score + price_position_score + momentum_score
+        
+        # Determine trend direction
+        trend_direction = "Bullish" if (ema_9 > ema_21 and di_plus > di_minus and price > ema_20) else "Bearish"
+        
+        return {
+            "score": round(total_score, 1),
+            "direction": trend_direction,
+            "components": {
+                "ema_alignment": ema_alignment_score,
+                "adx_strength": adx_score,
+                "di_strength": di_score,
+                "price_position": price_position_score,
+                "momentum": momentum_score
+            }
+        }
     
     def classify_market_regime(self, df, latest_row):
         """Classify the current market regime for context"""

@@ -1,0 +1,460 @@
+"""
+Chat Service with OpenRouter Integration
+Orchestrates Claude Opus 4.5 with tool calling
+"""
+
+import os
+import json
+import requests
+from typing import List, Dict, Optional, AsyncGenerator
+import asyncio
+from openai import AsyncOpenAI
+
+class ChatService:
+    """
+    Chat orchestration service using Claude Opus 4.5 via OpenRouter
+    Implements the "Empathetic Expert" persona with automatic beginner notes
+    """
+    
+    def __init__(self):
+        self.api_key = os.getenv("OPENROUTER_API_KEY", "")
+        # Using the FASTEST models available on OpenRouter
+        self.model = os.getenv("AI_MODEL", "deepseek/deepseek-chat")  # Extremely fast and cheap
+        self.fallback_model = "google/gemini-2.0-flash-exp:free"  # Ultra fast free fallback
+        self.base_url = "https://openrouter.ai/api/v1"
+        
+        # Initialize OpenAI Async Client for OpenRouter
+        self.client = AsyncOpenAI(
+            base_url=self.base_url,
+            api_key=self.api_key,
+        )
+        
+        # Import services for tool calling
+        from services.technical_analysis import TechnicalAnalysisService
+        from services.tokenomics_service import TokenomicsService
+        from services.news_service import NewsService
+        from services.web_research_service import WebResearchService
+        
+        self.technical_service = TechnicalAnalysisService()
+        self.tokenomics_service = TokenomicsService()
+        self.news_service = NewsService()
+        self.web_research_service = WebResearchService()
+    
+    def _get_system_prompt(self, user_name: str, user_age: int) -> str:
+        """Enhanced system prompt - AI handles everything naturally"""
+        return f"""You are Nunno, a friendly and empathetic AI financial educator created by Mujtaba Kazmi. 
+        
+Your mission: Make finance accessible to everyone, especially beginners. 
+        
+User: {user_name}, {user_age} years old
+        
+Guidelines:
+        - Explain complex concepts simply using analogies and real-world examples
+        - Keep responses conversational, concise (2-4 paragraphs), and engaging
+        - Use emojis to make finance feel approachable 💡📈
+        - Never give financial advice - educate, don't direct
+        - Answer questions about crypto, stocks, DeFi, trading, technical analysis, market trends, etc.
+        - When discussing prices or market data, explain what the numbers mean
+        - Be encouraging and supportive of the learning journey
+        
+You are knowledgeable, patient, and passionate about financial literacy!"""
+    
+    async def process_message(
+        self,
+        message: str,
+        user_name: str = "User",
+        user_age: int = 18,
+        conversation_history: Optional[List[Dict[str, str]]] = None
+    ) -> Dict:
+        """
+        Process a chat message with tool calling orchestration (Non-streaming)
+        """
+        if not self.api_key:
+            return {
+                "response": "⚠️ OpenRouter API key not configured. Please add OPENROUTER_API_KEY to your .env file.",
+                "tool_calls": [],
+                "data_used": {}
+            }
+        
+        # Detect tools FIRST (only predictions)
+        tools_to_call = await self._classify_intent_and_extract_entities(message)
+        tool_data = {}
+        
+        # Execute tool calls ONLY for predictions
+        if tools_to_call:
+            for tool_name, params in tools_to_call:
+                if tool_name == "technical_analysis":
+                    tool_data["technical"] = self.technical_service.analyze(params["ticker"], params.get("interval", "15m"))
+        
+        # Build messages - MINIMAL context
+        messages = [{"role": "system", "content": self._get_system_prompt(user_name, user_age)}]
+        
+        # Add user message
+        messages.append({"role": "user", "content": message})
+        
+        # ONLY add tool context if we have prediction data
+        if tool_data:
+            tool_context = self._format_tool_context(tool_data)
+            messages.append({"role": "user", "content": tool_context})
+        
+        # Call OpenRouter via OpenAI SDK
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                max_tokens=800,  # Reduced for speed
+                temperature=0.7,
+                extra_headers={
+                    "HTTP-Referer": "https://nunno.finance",
+                    "X-Title": "Nunno Finance"
+                }
+            )
+            
+            ai_response = response.choices[0].message.content
+            
+            return {
+                "response": ai_response,
+                "tool_calls": [tool[0] for tool in tools_to_call] if tools_to_call else [],
+                "data_used": tool_data
+            }
+            
+        except Exception as e:
+            return {
+                "response": f"I'm having trouble connecting to my brain right now. Error: {str(e)}",
+                "tool_calls": [],
+                "data_used": {}
+            }
+    
+    async def stream_message(
+        self,
+        message: str,
+        user_name: str = "User",
+        user_age: int = 18,
+        conversation_history: Optional[List[Dict[str, str]]] = None
+    ) -> AsyncGenerator[str, None]:
+        """
+        Stream chat responses for real-time display using AsyncOpenAI
+        Optimized to run tools in parallel and provide immediate feedback
+        """
+        if not self.api_key:
+            yield f"data: {json.dumps({'response': '⚠️ OpenRouter API key not configured.'})}\n\n"
+            return
+            
+        # 1. Detect tools (fast keyword-based detection)
+        print(f"[CHAT] Detecting tools for: {message[:50]}...")
+        tools_to_call = await self._classify_intent_and_extract_entities(message)
+        print(f"[CHAT] Tools detected: {tools_to_call}")
+        tool_data = {}
+        
+        # 2. Execute tools in parallel with immediate status feedback
+        if tools_to_call:
+            # Yield initial status immediately
+            yield f"data: {json.dumps({'type': 'status', 'content': '🔍 Gathering data...'})}\n\n"
+            
+            # Create async tasks for parallel execution
+            async def run_technical_analysis(params):
+                try:
+                    # Run in thread pool since it's synchronous
+                    return await asyncio.wait_for(
+                        asyncio.get_event_loop().run_in_executor(
+                            None, 
+                            self.technical_service.analyze, 
+                            params["ticker"]
+                        ),
+                        timeout=3.0  # Reduced for speed
+                    )
+                except asyncio.TimeoutError:
+                    print(f"Technical analysis timed out")
+                    return None
+                except Exception as e:
+                    print(f"Technical analysis error: {e}")
+                    return None
+            
+            async def run_tokenomics(params):
+                try:
+                    coin_id = params.get("coin_id", "").lower()
+                    return await asyncio.wait_for(
+                        asyncio.get_event_loop().run_in_executor(
+                            None,
+                            self.tokenomics_service.analyze,
+                            coin_id
+                        ),
+                        timeout=3.0  # Reduced for speed
+                    )
+                except asyncio.TimeoutError:
+                    print(f"Tokenomics timed out")
+                    return None
+                except Exception as e:
+                    print(f"Tokenomics error: {e}")
+                    return None
+            
+            async def run_news(params):
+                try:
+                    return await asyncio.wait_for(
+                        asyncio.get_event_loop().run_in_executor(
+                            None,
+                            self.news_service.get_news_sentiment,
+                            params["ticker"]
+                        ),
+                        timeout=3.0  # Reduced for speed
+                    )
+                except asyncio.TimeoutError:
+                    print(f"News timed out")
+                    return None
+                except Exception as e:
+                    print(f"News error: {e}")
+                    return None
+            
+            async def run_web_research(params):
+                try:
+                    if "url" in params:
+                        task = asyncio.get_event_loop().run_in_executor(
+                            None,
+                            self.web_research_service.scrape_url,
+                            params["url"]
+                        )
+                    else:
+                        task = asyncio.get_event_loop().run_in_executor(
+                            None,
+                            self.web_research_service.search_web,
+                            params["query"]
+                        )
+                    return await asyncio.wait_for(task, timeout=4.0)  # Reduced for speed
+                except asyncio.TimeoutError:
+                    print(f"Web research timed out")
+                    return None
+                except Exception as e:
+                    print(f"Web research error: {e}")
+                    return None
+            
+            # Execute all tools in parallel
+            tasks = []
+            tool_names = []
+            for tool_name, params in tools_to_call:
+                tool_names.append(tool_name)
+                if tool_name == "technical_analysis":
+                    tasks.append(run_technical_analysis(params))
+                elif tool_name == "tokenomics":
+                    tasks.append(run_tokenomics(params))
+                elif tool_name == "news":
+                    tasks.append(run_news(params))
+                elif tool_name == "web_research":
+                    tasks.append(run_web_research(params))
+            
+            # Wait for all tools to complete in parallel
+            if tasks:
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                # Map results back to tool names
+                for i, (tool_name, params) in enumerate(tools_to_call):
+                    result = results[i]
+                    if result and not isinstance(result, Exception):
+                        # Map tool_name to the key used in tool_data
+                        if tool_name == "technical_analysis":
+                            tool_data["technical"] = result
+                        elif tool_name == "tokenomics":
+                            tool_data["tokenomics"] = result
+                        elif tool_name == "news":
+                            tool_data["news"] = result
+                        elif tool_name == "web_research":
+                            tool_data["web_research"] = result
+            
+            # Send tool data once all complete
+            if tool_data:
+                yield f"data: {json.dumps({'type': 'data', 'tool_calls': tool_names, 'data_used': tool_data})}\n\n"
+
+        # 3. Build messages - MINIMAL context
+        messages = [{"role": "system", "content": self._get_system_prompt(user_name, user_age)}]
+        
+        # Add user message
+        messages.append({"role": "user", "content": message})
+        
+        # ONLY add tool context if we have prediction data
+        if tool_data:
+            tool_context = self._format_tool_context(tool_data)
+            messages.append({"role": "user", "content": tool_context})
+
+        # 4. Stream from OpenRouter using AsyncOpenAI with automatic fallback
+        current_model = self.model
+        retry_with_fallback = False
+        
+        try:
+            stream = await self.client.chat.completions.create(
+                model=current_model,
+                messages=messages,
+                max_tokens=800,  # Reduced for faster generation
+                temperature=0.7,
+                stream=True,
+                extra_headers={
+                    "HTTP-Referer": "https://nunno.finance",
+                    "X-Title": "Nunno Finance"
+                }
+            )
+            
+            async for chunk in stream:
+                content = chunk.choices[0].delta.content
+                if content:
+                    yield f"data: {json.dumps({'type': 'text', 'content': content})}\n\n"
+                                
+        except Exception as e:
+            error_msg = str(e).lower()
+            
+            # Check for token-related errors or Rate Limits (429)
+            if any(keyword in error_msg for keyword in ["token", "context_length", "max_tokens", "too long", "402", "429", "rate"]):
+                # Try fallback to smaller model
+                if current_model != self.fallback_model:
+                    retry_with_fallback = True
+                    yield f"data: {json.dumps({'type': 'status', 'content': f'⚡ Switching to faster model ({self.fallback_model})...'})}\n\n"
+                else:
+                    # Already using fallback, show error
+                    if "402" in str(e):
+                        error_msg = "⚠️ Your OpenRouter account balance is too low. Please top up at https://openrouter.ai/settings/credits"
+                    else:
+                        error_msg = "⚠️ Message too long even for compact model. Please try a shorter message."
+                    yield f"data: {json.dumps({'type': 'error', 'content': error_msg})}\n\n"
+            elif "401" in str(e):
+                error_msg = "🔑 Invalid API Key. Please check your OPENROUTER_API_KEY in the .env file."
+                yield f"data: {json.dumps({'type': 'error', 'content': error_msg})}\n\n"
+            else:
+                # Generic error
+                yield f"data: {json.dumps({'type': 'error', 'content': f'Error: {str(e)}'})}\n\n"
+        
+        # Retry with fallback model if needed
+        if retry_with_fallback:
+            try:
+                stream = await self.client.chat.completions.create(
+                    model=self.fallback_model,
+                    messages=messages,
+                    max_tokens=600,  # Reduced for faster fallback
+                    temperature=0.7,
+                    stream=True,
+                    extra_headers={
+                        "HTTP-Referer": "https://nunno.finance",
+                        "X-Title": "Nunno Finance"
+                    }
+                )
+                
+                async for chunk in stream:
+                    content = chunk.choices[0].delta.content
+                    if content:
+                        yield f"data: {json.dumps({'type': 'text', 'content': content})}\n\n"
+            
+            except Exception as fallback_error:
+                error_msg = f"⚠️ Both models failed. Error: {str(fallback_error)}"
+                yield f"data: {json.dumps({'type': 'error', 'content': error_msg})}\n\n"
+    
+    async def _classify_intent_and_extract_entities(self, message: str) -> List[tuple]:
+        """
+        SIMPLIFIED: Only detect prediction requests
+        Everything else goes directly to AI chat
+        """
+        message_lower = message.lower()
+        
+        # ONLY detect prediction requests (technical analysis)
+        prediction_keywords = [
+            "predict", "prediction", "forecast", "price prediction",
+            "will it go up", "will it go down", "future price",
+            "what will", "price target", "technical analysis"
+        ]
+        
+        # Check if this is a prediction request
+        is_prediction_request = any(keyword in message_lower for keyword in prediction_keywords)
+        
+        if is_prediction_request:
+            # Extract crypto ticker
+            ticker = self._extract_ticker(message_lower)
+            if ticker:
+                print(f"[DETECTION] Prediction request detected for {ticker}")
+                return [("technical_analysis", {"ticker": ticker})]
+        
+        # Everything else - let AI handle it naturally
+        print(f"[DETECTION] General chat - passing to AI")
+        return []
+
+    def _extract_ticker(self, message_lower: str) -> Optional[str]:
+        """Extract cryptocurrency ticker from message"""
+        
+        # Comprehensive ticker mapping (simplified list)
+        common_tickers = {
+            # Top Market Cap
+            "bitcoin": "BTCUSDT", "btc": "BTCUSDT",
+            "ethereum": "ETHUSDT", "eth": "ETHUSDT",
+            "solana": "SOLUSDT", "sol": "SOLUSDT",
+            "binance": "BNBUSDT", "bnb": "BNBUSDT",
+            "ripple": "XRPUSDT", "xrp": "XRPUSDT",
+            "cardano": "ADAUSDT", "ada": "ADAUSDT",
+            "avalanche": "AVAXUSDT", "avax": "AVAXUSDT",
+            "dogecoin": "DOGEUSDT", "doge": "DOGEUSDT",
+            "polkadot": "DOTUSDT", "dot": "DOTUSDT",
+            "polygon": "MATICUSDT", "matic": "MATICUSDT",
+            "shiba": "SHIBUSDT", "shib": "SHIBUSDT", "shiba inu": "SHIBUSDT",
+            "tron": "TRXUSDT", "trx": "TRXUSDT",
+            "chainlink": "LINKUSDT", "link": "LINKUSDT",
+            "uniswap": "UNIUSDT", "uni": "UNIUSDT",
+            "litecoin": "LTCUSDT", "ltc": "LTCUSDT",
+            "pepe": "PEPEUSDT",
+            "sui": "SUIUSDT",
+            "sei": "SEIUSDT",
+        }
+        
+        # Try to find a matching ticker
+        for name, ticker in common_tickers.items():
+            if name in message_lower:
+                return ticker
+        
+        return None
+
+    def _format_tool_context(self, tool_data: Dict) -> str:
+        """Balanced context - essential values + key indicators for AI explanations"""
+        parts = []
+        
+        # Technical Analysis: Include key indicators for explanations
+        if "technical" in tool_data:
+            t = tool_data["technical"]
+            # Core summary
+            summary = f"Price:${t.get('current_price',0):.0f} Bias:{t.get('bias','?')} Confidence:{t.get('confidence',0)}%"
+            
+            # Key indicators for AI to explain
+            indicators = t.get('indicators', {})
+            if indicators:
+                summary += f" RSI:{indicators.get('rsi_14', t.get('rsi', 0)):.0f}"
+                summary += f" MACD:{indicators.get('macd', 0):.1f}"
+                summary += f" ADX:{indicators.get('adx', 0):.0f}"
+            
+            # Key levels for context
+            levels = t.get('key_levels', {})
+            if levels:
+                summary += f" Support:${levels.get('support', 0):.0f} Resistance:${levels.get('resistance', 0):.0f}"
+            
+            # Signals
+            signals = t.get('signals', [])
+            if signals:
+                summary += f" Signals:{','.join(signals[:3])}"
+            
+            # Brief explanation
+            explanation = t.get('explanation', '')[:150]
+            if explanation:
+                summary += f" | {explanation}"
+            
+            parts.append(summary)
+            
+        # Tokenomics: Keep minimal
+        if "tokenomics" in tool_data:
+            t = tool_data["tokenomics"]
+            if isinstance(t, dict):
+                parts.append(f"Token:{t.get('Token_Name','')} Price:${t.get('Current_Price',0)} Rank:#{t.get('Market_Cap_Rank',0)}")
+                
+        # News: Include sentiment details
+        if "news" in tool_data:
+            n = tool_data["news"]
+            parts.append(f"News Sentiment:{n.get('sentiment','neutral')} Score:{n.get('sentiment_score',0)} Count:{n.get('news_count',0)}")
+            
+        # Web: Only title
+        if "web_research" in tool_data:
+            wr = tool_data["web_research"]
+            if isinstance(wr, dict):
+                parts.append(f"Web:{wr.get('title','')[:80]}")
+            elif isinstance(wr, list) and wr:
+                parts.append(f"Search:{wr[0].get('title','')[:80]}")
+                
+        return " | ".join(parts)

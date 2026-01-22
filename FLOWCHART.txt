@@ -1,0 +1,62 @@
+┌─────────────────────────────────────────────────────────────┐
+│                    USER INTERACTION                         │
+│  "What happens if Fed cuts rates tomorrow?"                 │
+└────────────────────┬────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────────┐
+│                   MY APP (ORCHESTRATOR)                     │
+│                                                             │
+│  1. Parse user question → Extract event type "Fed_Rate_Cut" │
+│  2. Query historical database for similar events            │
+│  3. Run current technical analysis (existing module)        │
+│  4. Package everything into structured payload              │
+└────────────────────┬────────────────────────────────────────┘
+                     │
+        ┌────────────┴────────────┐
+        │                          │
+        ▼                          ▼
+┌──────────────────┐    ┌─────────────────────────┐
+│  EVENT DATABASE  │    │  LIVE TECHNICAL ENGINE  │
+│                  │    │  (Your current module)  │
+│  Historical Data:│    │                         │
+│  - 30 Fed events │    │  Runs 4H analysis:      │
+│  - Price changes │    │  - RSI, MACD, EMAs      │
+│  - Technicals    │    │  - Confluence score     │
+│  - Outcomes      │    │  - Support/Resistance   │
+│  - Fear & Greed  │    │  - Volume profile       │
+└────────┬─────────┘    └──────────┬──────────────┘
+         │                          │
+         └──────────┬───────────────┘
+                    │
+                    ▼
+         ┌────────────────────────┐
+         │  STRUCTURED PAYLOAD    │
+         │  (JSON to AI)          │
+         │                        │
+         │  {                     │
+         │   "query": "Fed cut",  │
+         │   "historical": [...], │
+         │   "current_tech": {...}│
+         │   "context": "..."     │
+         │  }                     │
+         └──────────┬─────────────┘
+                    │
+                    ▼
+         ┌────────────────────────┐
+         │    AI API (Claude)     │
+         │                        │
+         │  Analyzes patterns,    │
+         │  generates natural     │
+         │  language explanation  │
+         │  with confidence       │
+         └──────────┬─────────────┘
+                    │
+                    ▼
+         ┌────────────────────────┐
+         │   USER-FRIENDLY OUTPUT │
+         │                        │
+         │  "Based on 8 similar   │
+         │   Fed rate cuts where  │
+         │   RSI was 35-45..."    │
+         └────────────────────────┘

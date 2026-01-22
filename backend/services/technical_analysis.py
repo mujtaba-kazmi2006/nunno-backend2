@@ -23,6 +23,16 @@ class TechnicalAnalysisService:
     """
     
     def __init__(self):
+        # Setup ML Enhancement
+        try:
+            # Import from backend root
+            sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            from ml_predictor import enhance_trading_analyzer_with_ml
+            enhance_trading_analyzer_with_ml(TradingAnalyzer)
+            print("✅ ML Enhancement applied to TradingAnalyzer")
+        except Exception as e:
+            print(f"⚠️ Failed to apply ML enhancement: {e}")
+
         self.analyzer = TradingAnalyzer()
     
     def analyze(self, ticker: str, interval: str = "15m"):
@@ -46,7 +56,11 @@ class TechnicalAnalysisService:
             
             # Get enhanced analysis features
             market_regime = self.analyzer.classify_market_regime(df, latest_row)
-            trend_strength = self.analyzer.calculate_trend_strength(latest_row)
+            # Use the new advanced trend strength if available
+            if 'advanced_trend' in confluences:
+                trend_strength = confluences['advanced_trend']
+            else:
+                trend_strength = self.analyzer.calculate_trend_strength(latest_row)
             volume_profile = self.analyzer.analyze_volume_profile(df, latest_row)
             reasoning_chain = self.analyzer.build_reasoning_chain(df, latest_row, confluences, bias, strength)
             
@@ -94,7 +108,7 @@ class TechnicalAnalysisService:
                     'ema21': float(row['EMA_21'])
                 })
             
-            # Build response
+            # Build response with MORE indicators
             response = {
                 "ticker": ticker,
                 "interval": interval,
@@ -102,58 +116,39 @@ class TechnicalAnalysisService:
                 "bias": bias_simple,
                 "confidence": round(strength, 1),
                 "rsi": round(rsi, 1),
-                "signals": signals,
-                "explanation": explanation,
-                "data_source": data_source,
-                "is_synthetic": is_synthetic,
+                "signals": signals[:8],  # Increased from 5 to 8
+                "explanation": explanation[:400],
                 "market_regime": market_regime,
                 "trend_strength": trend_strength,
-                "volume_profile": volume_profile,
-                "reasoning_chain": reasoning_chain,
-                "price_history": price_history,  # Keep history for charts
+                "price_history": price_history,  # ADDED BACK - Chart data
                 "indicators": {
-                    "momentum": {
-                        "rsi_14": round(float(latest_row['RSI_14']), 2),
-                        "stoch_k": round(float(latest_row['Stoch_K']), 2),
-                        "stoch_d": round(float(latest_row['Stoch_D']), 2),
-                        "williams_r": round(float(latest_row['Williams_R']), 2),
-                        "roc_14": round(float(latest_row['ROC_14']), 2)
-                    },
-                    "trend": {
-                        "adx": round(float(latest_row['ADX']), 2),
-                        "di_plus": round(float(latest_row['DI_Plus']), 2),
-                        "di_minus": round(float(latest_row['DI_Minus']), 2),
-                        "macd": round(float(latest_row['MACD']), 2),
-                        "macd_signal": round(float(latest_row['MACD_Signal']), 2),
-                        "macd_hist": round(float(latest_row['MACD_Histogram']), 2),
-                        "ema_50": round(float(latest_row['EMA_50']), 4)
-                    },
-                    "volatility": {
-                        "atr_percent": round(float(latest_row['ATR_Percent']), 2),
-                        "bb_width": round(float(latest_row['BB_Width']), 2),
-                        "bb_position": round(float(latest_row['BB_Position']), 2)
-                    },
-                    "volume": {
-                        "volume_ratio": round(float(latest_row['Volume_Ratio']), 2),
-                        "cmf": round(float(latest_row['CMF']), 3)
-                    }
+                    "rsi_14": round(float(latest_row['RSI_14']), 1),
+                    "macd": round(float(latest_row['MACD']), 2),
+                    "macd_signal": round(float(latest_row['MACD_Signal']), 2),
+                    "adx": round(float(latest_row['ADX']), 1),
+                    "di_plus": round(float(latest_row['DI_Plus']), 1),
+                    "di_minus": round(float(latest_row['DI_Minus']), 1),
+                    "ema_9": round(float(latest_row['EMA_9']), 2),
+                    "ema_21": round(float(latest_row['EMA_21']), 2),
+                    "ema_50": round(float(latest_row['EMA_50']), 2),
+                    "stoch_k": round(float(latest_row['Stoch_K']), 1),
+                    "volume_ratio": round(float(latest_row['Volume_Ratio']), 2),
+                    "bb_position": round(float(latest_row['BB_Position']), 2),
+                    "atr_percent": round(float(latest_row['ATR_Percent']), 2),
                 },
                 "key_levels": {
                     "support": float(latest_row['S1']),
                     "resistance": float(latest_row['R1']),
                     "pivot": float(latest_row['Pivot']),
-                    "bb_upper": float(latest_row['BB_Upper']),
-                    "bb_lower": float(latest_row['BB_Lower'])
                 },
                 "confluences": {
                     "bullish_count": len(confluences['bullish']),
                     "bearish_count": len(confluences['bearish']),
                     "neutral_count": len(confluences['neutral']),
-                    "bullish_signals": [self._format_confluence(c) for c in confluences['bullish']],  # All signals
-                    "bearish_signals": [self._format_confluence(c) for c in confluences['bearish']],  # All signals
-                    "neutral_signals": [self._format_confluence(c) for c in confluences['neutral']]   # All signals
-                },
-                "beginner_notes": self._get_beginner_notes(rsi, macd, latest_row)
+                    # Add actual confluence details for display
+                    "bullish_signals": [self._format_confluence(c) for c in confluences['bullish'][:5]],
+                    "bearish_signals": [self._format_confluence(c) for c in confluences['bearish'][:5]],
+                }
             }
             
             return response

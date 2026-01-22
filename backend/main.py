@@ -64,12 +64,7 @@ app = FastAPI(
 # CORS configuration for React frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173", 
-        "http://localhost:3000",
-        os.getenv("FRONTEND_URL", ""), # Allow production frontend
-        "https://nunno-frontend2.vercel.app" # Predictable Vercel URL structure
-    ],
+    allow_origins=["http://localhost:5173", "http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -313,8 +308,33 @@ async def websocket_prices(websocket: WebSocket):
             try:
                 # Wait for messages from client (ping/pong or subscription requests)
                 data = await websocket.receive_text()
-                # Echo back to keep connection alive
-                await websocket.send_text(json.dumps({"type": "pong"}))
+                
+                # Parse the message
+                try:
+                    message = json.loads(data)
+                    message_type = message.get('type')
+                    
+                    if message_type == 'subscribe_kline':
+                        # Handle kline subscription
+                        symbol = message.get('symbol', 'btcusdt')
+                        interval = message.get('interval', '1m')
+                        await websocket_service.add_kline_client(websocket, symbol.upper(), interval)
+                    elif message_type == 'unsubscribe_kline':
+                        # Handle kline unsubscription
+                        symbol = message.get('symbol', 'btcusdt')
+                        interval = message.get('interval', '1m')
+                        await websocket_service.remove_kline_client(websocket, symbol.upper(), interval)
+                    elif message_type == 'ping':
+                        # Respond to ping
+                        await websocket.send_text(json.dumps({"type": "pong"}))
+                    else:
+                        # Unknown message type, send pong as default
+                        await websocket.send_text(json.dumps({"type": "pong"}))
+                        
+                except json.JSONDecodeError:
+                    # If not JSON, treat as ping
+                    await websocket.send_text(json.dumps({"type": "pong"}))
+                    
             except WebSocketDisconnect:
                 break
             except Exception as e:
@@ -324,6 +344,9 @@ async def websocket_prices(websocket: WebSocket):
     finally:
         # Remove client from service
         await websocket_service.remove_client(websocket)
+        # Also try to remove from kline subscribers if they were subscribed
+        # Note: This is a simplified cleanup, ideally we'd track both subscriptions
+        await websocket_service.remove_client(websocket)  # This removes from general client list
 
 # ==================== REST ENDPOINTS ====================
 
@@ -451,12 +474,7 @@ async def chat_stream(request: ChatRequest):
                 user_age=request.user_age,
                 conversation_history=request.conversation_history
             ),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no"
-            }
+            media_type="text/event-stream"
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

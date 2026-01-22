@@ -1,9 +1,45 @@
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
-.env
-.venv
+*.so
+.Python
 env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
 venv/
-.idea/
+.env
+
+# Node
+# node_modules/
+dist/
+.DS_Store
+
+# Frontend
+frontend/
+
+# IDE
 .vscode/
+.idea/
+
+# Database
+*.db
+*.sqlite3
+
+# Logs
+*.log
