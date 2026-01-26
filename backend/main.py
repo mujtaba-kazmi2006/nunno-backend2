@@ -31,6 +31,7 @@ from services.chat_service import ChatService
 from services.tokenomics_service import TokenomicsService
 from services.news_service import NewsService
 from services.websocket_service import BinanceWebSocketService
+from services.pattern_recognition_service import pattern_service
 
 # Initialize WebSocket service
 websocket_service = None
@@ -478,6 +479,77 @@ async def chat_stream(request: ChatRequest):
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# ==================== PATTERN RECOGNITION ENDPOINTS ====================
+
+class PatternRequest(BaseModel):
+    query: str
+    base_price: Optional[float] = 50000
+    num_points: Optional[int] = 50
+
+@app.post("/api/v1/pattern/recognize")
+async def recognize_pattern(request: PatternRequest):
+    """
+    Recognize chart pattern from user query and generate visualization data
+    
+    Args:
+        query: User's pattern request (e.g., "show me a head and shoulders pattern")
+        base_price: Starting price for pattern generation
+        num_points: Number of data points to generate
+    
+    Returns:
+        Pattern data structured for Recharts visualization
+    """
+    try:
+        # Recognize pattern from query
+        pattern_name = pattern_service.recognize_pattern(request.query)
+        
+        if not pattern_name:
+            return {
+                "success": False,
+                "message": "I couldn't recognize a specific chart pattern in your request. Try asking for patterns like 'head and shoulders', 'double top', 'ascending triangle', etc.",
+                "available_patterns": list(pattern_service.PATTERNS.keys())
+            }
+        
+        # Generate pattern data
+        pattern_data = pattern_service.generate_pattern_data(
+            pattern_name=pattern_name,
+            base_price=request.base_price,
+            num_points=request.num_points
+        )
+        
+        return {
+            "success": True,
+            "pattern": pattern_data,
+            "message": f"Generated {pattern_name.replace('_', ' ').title()} pattern"
+        }
+        
+    except Exception as e:
+        print(f"Pattern recognition error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/v1/pattern/list")
+async def list_patterns():
+    """
+    Get list of all available chart patterns
+    
+    Returns:
+        List of available patterns with their metadata
+    """
+    patterns = []
+    for pattern_name, pattern_info in pattern_service.PATTERNS.items():
+        patterns.append({
+            "name": pattern_name,
+            "display_name": pattern_name.replace('_', ' ').title(),
+            "type": pattern_info['type'],
+            "direction": pattern_info['direction'],
+            "keywords": pattern_info['keywords']
+        })
+    
+    return {
+        "patterns": patterns,
+        "total": len(patterns)
+    }
 
 if __name__ == "__main__":
     import uvicorn
