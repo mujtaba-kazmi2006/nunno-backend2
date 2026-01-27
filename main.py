@@ -154,7 +154,7 @@ async def root():
     return {
         "status": "online",
         "service": "Nunno Finance API",
-        "version": "1.0.0"
+        "version": "1.1.0-FIXED"
     }
 
 # ==================== AUTHENTICATION ENDPOINTS ====================
