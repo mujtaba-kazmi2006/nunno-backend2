@@ -63,8 +63,15 @@ Be encouraging and supportive!"""
     ) -> Dict:
         """Process a chat message"""
         if not self.api_key:
+            # Check if running locally or on Hugging Face
+            is_local = os.path.exists('.env')
+            error_msg = (
+                "⚠️ OpenRouter API key not configured. Add OPENROUTER_API_KEY to your .env file."
+                if is_local else
+                "⚠️ OpenRouter API key not configured. Add it as a 'Secret' in Hugging Face Space Settings."
+            )
             return {
-                "response": "⚠️ OpenRouter API key not configured. Please add it as a 'Secret' in Hugging Face Space Settings.",
+                "response": error_msg,
                 "tool_calls": [],
                 "data_used": {}
             }
@@ -152,7 +159,14 @@ Be encouraging and supportive!"""
     ) -> AsyncGenerator[str, None]:
         """Stream chat responses"""
         if not self.api_key:
-            yield f"data: {json.dumps({'response': '⚠️ API key not configured. Add it in Hugging Face Secrets.'})}\n\n"
+            # Check if running locally or on Hugging Face
+            is_local = os.path.exists('.env')
+            error_msg = (
+                "⚠️ API key not configured. Add OPENROUTER_API_KEY to your .env file."
+                if is_local else
+                "⚠️ API key not configured. Add it in Hugging Face Secrets."
+            )
+            yield f"data: {json.dumps({'response': error_msg})}\n\n"
             return
             
         # Detect prediction requests
@@ -261,14 +275,20 @@ Be encouraging and supportive!"""
                     print(f"Fallback streaming failed: {fallback_e}")
 
             # Determine error message
+            print(f"Chat streaming error: {e}")  # Debug: see actual error
+            is_local = os.path.exists('.env')
             if "402" in error_msg:
                 msg = "⚠️ Low balance. Top up at https://openrouter.ai/settings/credits"
             elif "401" in error_msg:
-                msg = "🔑 Invalid API Key. Check your Hugging Face OPENROUTER_API_KEY Secret."
+                msg = (
+                    "🔑 Invalid API Key. Check your OPENROUTER_API_KEY in the .env file."
+                    if is_local else
+                    "🔑 Invalid API Key. Check your Hugging Face OPENROUTER_API_KEY Secret."
+                )
             elif "429" in error_msg or "rate limit" in error_msg:
                 msg = "⚠️ AI service temporarily rate-limited. Check the prediction data above!"
             else:
-                msg = f"⚠️ AI response failed but data is available above."
+                msg = f"⚠️ AI response failed: {str(e)}"
             
             yield f"data: {json.dumps({'type': 'error', 'content': msg})}\n\n"
     

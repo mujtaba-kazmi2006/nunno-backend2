@@ -78,8 +78,7 @@ class BinanceWebSocketService:
                 
                 logger.info(f"Attempting Binance WebSocket: {endpoint}")
                 try:
-                    # Use open_timeout instead of timeout for websockets.connect
-                    async with websockets.connect(url, open_timeout=10) as websocket:
+                    async with websockets.connect(url, ping_timeout=10) as websocket:
                         self.binance_ws = websocket
                         logger.info(f"✅ Connected to Binance WebSocket: {endpoint}")
                         connected = True
@@ -122,12 +121,16 @@ class BinanceWebSocketService:
                     response = requests.get(endpoint, timeout=5)
                     if response.status_code == 200:
                         data = response.json()
-                        # Binance returns a list of tickers with 'symbol' key
-                        ticker_map = {item['symbol'].upper(): item for item in data if item['symbol'].upper() in self.symbols}
+                        # Binance returns a list of tickers
+                        # Handle both list and dict responses
+                        if isinstance(data, list):
+                            ticker_map = {item['s'].upper(): item for item in data if isinstance(item, dict) and 's' in item and item['s'].upper() in self.symbols}
+                        else:
+                            ticker_map = {}
                         
                         for symbol, ticker in ticker_map.items():
-                            current_price = float(ticker['lastPrice']) if 'lastPrice' in ticker else float(ticker.get('c', 0))
-                            percent_change = float(ticker['priceChangePercent']) if 'priceChangePercent' in ticker else float(ticker.get('P', 0))
+                            current_price = float(ticker['lastPrice']) if 'lastPrice' in ticker else float(ticker['c'])
+                            percent_change = float(ticker['priceChangePercent']) if 'priceChangePercent' in ticker else float(ticker['P'])
                             
                             self.price_data[symbol] = {
                                 'symbol': symbol,

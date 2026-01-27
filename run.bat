@@ -23,30 +23,28 @@ if %errorlevel% neq 0 (
 )
 
 REM Check if backend dependencies are installed
-if not exist "backend\venv" (
-    if not exist "backend\.venv" (
-        echo WARNING: Virtual environment not found
-        echo Please run setup-and-run.bat first to install dependencies
-        pause
-    )
+if not exist "nunno.db" (
+    echo WARNING: Database not found
+    echo Please run setup-and-run.bat first to install dependencies
+    pause
 )
 
 REM Check if frontend dependencies are installed
-if not exist "frontend\node_modules" (
+if not exist "..\nunno-frontend2\node_modules" (
     echo Installing frontend dependencies...
-    cd frontend
+    pushd "..\nunno-frontend2"
     call npm install
-    cd ..
+    popd
 )
 
 echo [1/2] Starting Backend Server...
-start "Nunno Backend" cmd /k "cd backend && python main.py || pause"
+start "Nunno Backend" cmd /k "python main.py || pause"
 
 echo Waiting for backend to initialize...
 timeout /t 5 /nobreak >nul
 
 echo [2/2] Starting Frontend Server...
-start "Nunno Frontend" cmd /k "cd frontend && npm run dev"
+start "Nunno Frontend" cmd /k "cd ..\nunno-frontend2 && npm run dev"
 
 echo Waiting for frontend to start...
 timeout /t 3 /nobreak >nul

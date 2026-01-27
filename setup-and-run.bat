@@ -39,24 +39,24 @@ echo.
 
 :: Check if .env file exists
 echo [3/7] Checking API key configuration...
-if not exist "backend\.env" (
+if not exist ".env" (
     echo [WARNING] No .env file found!
     echo.
     echo Creating .env file from template...
-    copy "backend\.env.example" "backend\.env" >nul
+    copy ".env.example" ".env" >nul
     echo.
     echo ====================================
     echo   ACTION REQUIRED!
     echo ====================================
     echo.
     echo Please add your OpenRouter API key to:
-    echo   backend\.env
+    echo   .env
     echo.
     echo 1. Get your API key from: https://openrouter.ai/
-    echo 2. Open backend\.env in notepad
+    echo 2. Open .env in notepad
     echo 3. Replace 'your_openrouter_api_key_here' with your actual key
     echo.
-    notepad backend\.env
+    notepad .env
     echo.
     set /p continue="Press ENTER when you've added your API key, or type 'skip' to continue anyway: "
     if /i "!continue!"=="skip" (
@@ -77,7 +77,7 @@ echo.
 :: Install core backend dependencies
 echo [5/7] Installing core backend dependencies...
 echo This may take a few minutes...
-cd backend
+REM cd backend
 pip install fastapi uvicorn[standard] python-dotenv requests pydantic python-multipart --quiet --disable-pip-version-check
 if errorlevel 1 (
     echo [ERROR] Failed to install core dependencies
@@ -106,14 +106,14 @@ if errorlevel 1 (
         exit /b 1
     )
 )
-cd ..
+REM cd ..
 echo [OK] Data science packages installed
 echo.
 
 :: Install frontend dependencies
 echo [7/7] Installing frontend dependencies...
 echo This may take a few minutes...
-cd frontend
+cd ..\nunno-frontend2
 
 :: Check if node_modules exists
 if exist "node_modules" (
@@ -129,7 +129,7 @@ if exist "node_modules" (
         exit /b 1
     )
 )
-cd ..
+cd ..\nunno-backend2
 echo [OK] Frontend dependencies installed
 echo.
 
@@ -155,14 +155,14 @@ timeout /t 3 /nobreak >nul
 
 :: Start backend server
 echo Starting backend server...
-start "Nunno Finance - Backend" cmd /k "cd backend && echo Backend Server Running on http://localhost:8000 && echo. && python main.py"
+start "Nunno Finance - Backend" cmd /k "echo Backend Server Running on http://localhost:8000 && echo. && python main.py"
 
 :: Wait a bit for backend to start
 timeout /t 5 /nobreak >nul
 
 :: Start frontend server
 echo Starting frontend server...
-start "Nunno Finance - Frontend" cmd /k "cd frontend && echo Frontend Server Running on http://localhost:5173 && echo. && npm run dev"
+start "Nunno Finance - Frontend" cmd /k "cd ..\nunno-frontend2 && echo Frontend Server Running on http://localhost:5173 && echo. && npm run dev"
 
 :: Wait for frontend to start
 timeout /t 5 /nobreak >nul
