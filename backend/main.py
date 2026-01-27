@@ -65,7 +65,7 @@ app = FastAPI(
 # CORS configuration for React frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=["*"], # Allow all origins for production/hosting
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -505,6 +505,15 @@ async def recognize_pattern(request: PatternRequest):
         pattern_name = pattern_service.recognize_pattern(request.query)
         
         if not pattern_name:
+            # Fallback to general chat if no specific pattern is recognized
+            if chat_service:
+                chat_response = await chat_service.process_message(request.query)
+                return {
+                    "success": True, # Still success, just not a pattern
+                    "message": chat_response.get("response", "I couldn't recognize that pattern or question."),
+                    "is_pattern": False
+                }
+            
             return {
                 "success": False,
                 "message": "I couldn't recognize a specific chart pattern in your request. Try asking for patterns like 'head and shoulders', 'double top', 'ascending triangle', etc.",
