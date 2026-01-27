@@ -78,7 +78,8 @@ class BinanceWebSocketService:
                 
                 logger.info(f"Attempting Binance WebSocket: {endpoint}")
                 try:
-                    async with websockets.connect(url, timeout=10) as websocket:
+                    # Use open_timeout instead of timeout for websockets.connect
+                    async with websockets.connect(url, open_timeout=10) as websocket:
                         self.binance_ws = websocket
                         logger.info(f"✅ Connected to Binance WebSocket: {endpoint}")
                         connected = True
@@ -121,12 +122,12 @@ class BinanceWebSocketService:
                     response = requests.get(endpoint, timeout=5)
                     if response.status_code == 200:
                         data = response.json()
-                        # Binance returns a list of tickers
-                        ticker_map = {item['s'].upper(): item for item in data if item['s'].upper() in self.symbols}
+                        # Binance returns a list of tickers with 'symbol' key
+                        ticker_map = {item['symbol'].upper(): item for item in data if item['symbol'].upper() in self.symbols}
                         
                         for symbol, ticker in ticker_map.items():
-                            current_price = float(ticker['lastPrice']) if 'lastPrice' in ticker else float(ticker['c'])
-                            percent_change = float(ticker['priceChangePercent']) if 'priceChangePercent' in ticker else float(ticker['P'])
+                            current_price = float(ticker['lastPrice']) if 'lastPrice' in ticker else float(ticker.get('c', 0))
+                            percent_change = float(ticker['priceChangePercent']) if 'priceChangePercent' in ticker else float(ticker.get('P', 0))
                             
                             self.price_data[symbol] = {
                                 'symbol': symbol,
