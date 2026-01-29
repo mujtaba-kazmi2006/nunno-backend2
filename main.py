@@ -480,12 +480,157 @@ async def chat_stream(request: ChatRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# ==================== FEED NUNNO ENDPOINT ====================
+
+class FeedNunnoRequest(BaseModel):
+    symbol: str = "BTCUSDT"
+    timeframe: str = "15m"
+    user_name: str = "User"
+
+@app.post("/api/v1/analyze/feed-nunno")
+async def feed_nunno(request: FeedNunnoRequest):
+    """
+    Feed Nunno - Comprehensive Market Intelligence Report
+    
+    This endpoint:
+    1. Fetches macro news (FED, regulations, major crypto events)
+    2. Gets multi-timeframe technical analysis (15m, 1h, 4h, 1d)
+    3. Calculates market metrics and volatility
+    4. Streams a detailed, fact-based intelligence report
+    """
+    if not chat_service or not technical_service or not news_service:
+        raise HTTPException(status_code=503, detail="Required services unavailable")
+    
+    try:
+        async def generate_feed_report():
+            # Phase 1: Macro & News Aggregation
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Gathering Global Macro News...'})}\n\n"
+            await asyncio.sleep(0.1)
+            
+            news_data = news_service.get_news_sentiment(request.symbol)
+            
+            macro_headlines = []
+            try:
+                from duckduckgo_search import DDGS
+                with DDGS() as ddgs:
+                    # Focus on Fed and US Economy impacting crypto
+                    queries = ["FED interest rate crypto impact", "US economy crypto regulation news"]
+                    for query in queries:
+                        results = list(ddgs.text(query, max_results=3, timelimit='d'))
+                        for r in results:
+                            macro_headlines.append({
+                                "title": r.get("title", ""),
+                                "source": "Macro Insight",
+                                "url": r.get("href", "")
+                            })
+            except Exception as e:
+                print(f"Macro news fetch fail: {e}")
+
+            # Phase 2: Multi-Timeframe Technical Analysis
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Aggregating Multi-Timeframe Data...'})}\n\n"
+            timeframes = ["15m", "1h", "4h", "1d"]
+            multi_tf_data = {}
+            
+            for tf in timeframes:
+                yield f"data: {json.dumps({'type': 'status', 'message': f'Analyzing {tf} data...'})}\n\n"
+                try:
+                    analysis = technical_service.analyze(request.symbol, tf)
+                    multi_tf_data[tf] = analysis
+                except Exception as e:
+                    print(f"Error analyzing {tf}: {e}")
+                    multi_tf_data[tf] = None
+
+            # Phase 3: Market Density & Stats
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Calculating Market Density...'})}\n\n"
+            df_24h = technical_service.analyzer.fetch_binance_ohlcv_with_fallback(
+                symbol=request.symbol, interval="15m", limit=96
+            )
+            
+            curr_price = 0
+            stats_24h = {"high": 0, "low": 0, "var": 0, "std": 0}
+            if not df_24h.empty:
+                curr_price = float(df_24h.iloc[-1]['Close'])
+                stats_24h["high"] = float(df_24h['High'].max())
+                stats_24h["low"] = float(df_24h['Low'].min())
+                stats_24h["var"] = ((curr_price - float(df_24h.iloc[0]['Open'])) / float(df_24h.iloc[0]['Open'])) * 100
+                stats_24h["std"] = float(df_24h['Close'].std())
+
+            # Phase 4: Construct Hyper-Detailed Prompt
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Constructing Intelligence Report...'})}\n\n"
+            
+            # Format Data for Prompt
+            crypto_news_str = "\n".join([f"- {h.get('title')} ({h.get('source')})" for h in news_data.get('headlines', [])[:5]])
+            macro_news_str = "\n".join([f"- {h.get('title')}" for h in macro_headlines[:5]])
+            
+            tf_details = ""
+            for tf, data in multi_tf_data.items():
+                if data:
+                    ind = data.get('indicators', {})
+                    tf_details += f"\n### {tf.upper()} TIMEFRAME:\n"
+                    tf_details += f"- Bias: {data.get('bias')} ({data.get('confidence')}% confidence)\n"
+                    tf_details += f"- RSI: {ind.get('rsi_14', ind.get('rsi', 'N/A'))}\n"
+                    tf_details += f"- MACD: {ind.get('macd', 'N/A')} | Signal: {ind.get('macd_signal', 'N/A')}\n"
+                    tf_details += f"- ADX: {ind.get('adx', 'N/A')} (Trend Strength)\n"
+                    tf_details += f"- Vol Ratio: {ind.get('volume_ratio', 'N/A')}x\n"
+                    tf_details += f"- Key Levels: Supp ${data.get('support_levels', ['N/A'])[0]} | Res ${data.get('resistance_levels', ['N/A'])[0]}\n"
+
+            prompt = f"""SYSTEM: You are Nunno, a High-Tier Market Intelligence Analyst. 
+Generate a DETAILED, FACT-BASED report. No generic advice. Use exact values.
+
+MARKET METRICS ({request.symbol}):
+- Price: ${curr_price:,.2f}
+- 24h High/Low: ${stats_24h['high']:,.2f} / ${stats_24h['low']:,.2f}
+- 24h Variance: {stats_24h['var']:+.2f}%
+- Volatility (STD): ${stats_24h['std']:.2f}
+
+SENTIMENT:
+- Fear/Greed: {news_data.get('fear_greed_index', {}).get('value')}/100 ({news_data.get('fear_greed_index', {}).get('classification')})
+- News Bias: {news_data.get('sentiment')}
+
+TOP MACRO NEWS:
+{macro_news_str if macro_news_str else "N/A - Monitor global liquidity."}
+
+CRYPTO NEWS:
+{crypto_news_str if crypto_news_str else "N/A - Monitor on-chain flows."}
+
+TECHNICAL MATRIX:
+{tf_details}
+
+OUTPUT_INSTRUCTIONS:
+1. **Macro Impact**: Start with how broad market news (FED/Economy) is affecting this specific asset.
+2. **Technical Cross-Section**: Create a MARKDOWN TABLE comparing the 4 timeframes (15m, 1h, 4h, 1d). Include columns: TF, Bias, RSI, ADX, Support, Resistance.
+3. **Indicator Deep Dive (15m)**: Detail ALL technical values for 15m. Explain RSI, MACD, and BB position specifically.
+4. **Market Temperature**: Interpret the 24h variance and volatility std dev. Is it a 'Hot', 'Stable', or 'Fragmented' market?
+5. **Key Observations**: 3-5 high-impact facts.
+6. **Strategy Note**: Suggested watch-levels based on S/R data.
+
+Be extremely detailed. Use bold headers. Stream the report now:"""
+
+            # Phase 5: Stream AI Analysis
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Generating Final Intelligence Briefing...'})}\n\n"
+            async for chunk in chat_service.stream_message(
+                message=prompt,
+                user_name=request.user_name,
+                user_age=18,
+                conversation_history=[]
+            ):
+                yield chunk
+            
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+        return StreamingResponse(generate_feed_report(), media_type="text/event-stream")
+        
+    except Exception as e:
+        print(f"Feed Nunno Critical Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 # ==================== PATTERN RECOGNITION ENDPOINTS ====================
 
 class PatternRequest(BaseModel):
     query: str
     base_price: Optional[float] = 50000
     num_points: Optional[int] = 50
+    interval: Optional[str] = "1d"
 
 @app.post("/api/v1/pattern/recognize")
 async def recognize_pattern(request: PatternRequest):
@@ -496,6 +641,7 @@ async def recognize_pattern(request: PatternRequest):
         query: User's pattern request (e.g., "show me a head and shoulders pattern")
         base_price: Starting price for pattern generation
         num_points: Number of data points to generate
+        interval: Timeframe interval (e.g., "1m", "1h", "1d")
     
     Returns:
         Pattern data structured for Recharts visualization
@@ -524,7 +670,8 @@ async def recognize_pattern(request: PatternRequest):
         pattern_data = pattern_service.generate_pattern_data(
             pattern_name=pattern_name,
             base_price=request.base_price,
-            num_points=request.num_points
+            num_points=request.num_points,
+            interval=request.interval
         )
         
         return {

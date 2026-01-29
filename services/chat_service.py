@@ -212,7 +212,7 @@ Be encouraging and supportive!"""
             stream = await self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                max_tokens=800,  # Increased for detailed explanations
+                max_tokens=2000,  # Increased for detailed Feed Nunno reports
                 temperature=0.7,
                 stream=True,
                 extra_headers={
@@ -249,7 +249,7 @@ Be encouraging and supportive!"""
                     stream = await self.client.chat.completions.create(
                         model=self.fallback_model,
                         messages=messages,
-                        max_tokens=800,
+                        max_tokens=2000,
                         temperature=0.7,
                         stream=True
                     )

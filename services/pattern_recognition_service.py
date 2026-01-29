@@ -195,12 +195,26 @@ class PatternRecognitionService:
         
         return None
     
+    def _get_scale_factor(self, interval: str) -> float:
+        """Get vertical scale factor based on chart interval"""
+        factors = {
+            '1m': 0.05,
+            '5m': 0.1,
+            '15m': 0.2,
+            '1h': 0.4,
+            '4h': 0.7,
+            '1d': 1.0,
+            '1w': 2.0
+        }
+        return factors.get(interval, 1.0)
+    
     def generate_pattern_data(
         self, 
         pattern_name: str, 
         base_price: float = 50000,
         num_points: int = 50,
-        volatility: float = 0.01
+        volatility: float = 0.01,
+        interval: str = '1d'
     ) -> Dict:
         """
         Generate structured data for a chart pattern with trendlines and annotations
@@ -243,7 +257,8 @@ class PatternRecognitionService:
             trendlines = []
             annotations = []
         else:
-            data, trendlines, annotations = generator(base_price, num_points, volatility)
+            scale = self._get_scale_factor(interval)
+            data, trendlines, annotations = generator(base_price, num_points, volatility, scale)
         
         return {
             'pattern_name': pattern_name,
@@ -261,7 +276,7 @@ class PatternRecognitionService:
     
     # Pattern generators return (data, trendlines, annotations)
     
-    def _generate_head_and_shoulders(self, base_price: float, num_points: int, volatility: float) -> Tuple[List[Dict], List[Dict], List[Dict]]:
+    def _generate_head_and_shoulders(self, base_price: float, num_points: int, volatility: float, scale: float = 1.0) -> Tuple[List[Dict], List[Dict], List[Dict]]:
         """Generate head and shoulders with neckline"""
         data = []
         points_per_section = num_points // 7
@@ -269,7 +284,7 @@ class PatternRecognitionService:
         # Left shoulder
         for i in range(points_per_section):
             progress = i / points_per_section
-            price = base_price + (base_price * 0.05 * progress) + random.uniform(-volatility, volatility) * base_price
+            price = base_price + (base_price * 0.05 * scale * progress) + random.uniform(-volatility * scale, volatility * scale) * base_price
             data.append({'x': len(data), 'y': price})
         
         left_shoulder_peak = data[-1]['y']
@@ -277,7 +292,7 @@ class PatternRecognitionService:
         # Dip after left shoulder
         for i in range(points_per_section):
             progress = i / points_per_section
-            price = data[-1]['y'] - (base_price * 0.03 * progress) + random.uniform(-volatility, volatility) * base_price
+            price = data[-1]['y'] - (base_price * 0.03 * scale * progress) + random.uniform(-volatility * scale, volatility * scale) * base_price
             data.append({'x': len(data), 'y': price})
         
         neckline_left = data[-1]['y']
@@ -285,7 +300,7 @@ class PatternRecognitionService:
         # Head
         for i in range(points_per_section):
             progress = i / points_per_section
-            price = data[-1]['y'] + (base_price * 0.08 * progress) + random.uniform(-volatility, volatility) * base_price
+            price = data[-1]['y'] + (base_price * 0.08 * scale * progress) + random.uniform(-volatility * scale, volatility * scale) * base_price
             data.append({'x': len(data), 'y': price})
         
         head_peak = data[-1]['y']
@@ -293,7 +308,7 @@ class PatternRecognitionService:
         # Dip after head
         for i in range(points_per_section):
             progress = i / points_per_section
-            price = data[-1]['y'] - (base_price * 0.06 * progress) + random.uniform(-volatility, volatility) * base_price
+            price = data[-1]['y'] - (base_price * 0.06 * scale * progress) + random.uniform(-volatility * scale, volatility * scale) * base_price
             data.append({'x': len(data), 'y': price})
         
         neckline_right = data[-1]['y']
@@ -301,7 +316,7 @@ class PatternRecognitionService:
         # Right shoulder
         for i in range(points_per_section):
             progress = i / points_per_section
-            price = data[-1]['y'] + (base_price * 0.04 * progress) + random.uniform(-volatility, volatility) * base_price
+            price = data[-1]['y'] + (base_price * 0.04 * scale * progress) + random.uniform(-volatility * scale, volatility * scale) * base_price
             data.append({'x': len(data), 'y': price})
         
         right_shoulder_peak = data[-1]['y']
@@ -309,7 +324,7 @@ class PatternRecognitionService:
         # Breakdown
         for i in range(points_per_section):
             progress = i / points_per_section
-            price = data[-1]['y'] - (base_price * 0.07 * progress) + random.uniform(-volatility, volatility) * base_price
+            price = data[-1]['y'] - (base_price * 0.07 * scale * progress) + random.uniform(-volatility * scale, volatility * scale) * base_price
             data.append({'x': len(data), 'y': price})
         
         # Neckline trendline
@@ -333,7 +348,7 @@ class PatternRecognitionService:
         
         return data, trendlines, annotations
     
-    def _generate_inverse_head_and_shoulders(self, base_price: float, num_points: int, volatility: float) -> Tuple[List[Dict], List[Dict], List[Dict]]:
+    def _generate_inverse_head_and_shoulders(self, base_price: float, num_points: int, volatility: float, scale: float = 1.0) -> Tuple[List[Dict], List[Dict], List[Dict]]:
         """Generate inverse H&S with neckline"""
         data = []
         points_per_section = num_points // 7
@@ -396,7 +411,7 @@ class PatternRecognitionService:
         
         return data, trendlines, annotations
     
-    def _generate_double_top(self, base_price: float, num_points: int, volatility: float) -> Tuple[List[Dict], List[Dict], List[Dict]]:
+    def _generate_double_top(self, base_price: float, num_points: int, volatility: float, scale: float = 1.0) -> Tuple[List[Dict], List[Dict], List[Dict]]:
         """Generate double top"""
         data = []
         points_per_section = num_points // 5
@@ -404,7 +419,7 @@ class PatternRecognitionService:
         # First peak
         for i in range(points_per_section):
             progress = i / points_per_section
-            price = base_price + (base_price * 0.06 * progress) + random.uniform(-volatility, volatility) * base_price
+            price = base_price + (base_price * 0.06 * scale * progress) + random.uniform(-volatility * scale, volatility * scale) * base_price
             data.append({'x': len(data), 'y': price})
         
         peak1 = data[-1]['y']
@@ -412,7 +427,7 @@ class PatternRecognitionService:
         # Dip
         for i in range(points_per_section):
             progress = i / points_per_section
-            price = data[-1]['y'] - (base_price * 0.04 * progress) + random.uniform(-volatility, volatility) * base_price
+            price = data[-1]['y'] - (base_price * 0.04 * scale * progress) + random.uniform(-volatility * scale, volatility * scale) * base_price
             data.append({'x': len(data), 'y': price})
         
         valley = data[-1]['y']
@@ -420,7 +435,7 @@ class PatternRecognitionService:
         # Second peak
         for i in range(points_per_section):
             progress = i / points_per_section
-            price = data[-1]['y'] + (base_price * 0.04 * progress) + random.uniform(-volatility, volatility) * base_price
+            price = data[-1]['y'] + (base_price * 0.04 * scale * progress) + random.uniform(-volatility * scale, volatility * scale) * base_price
             data.append({'x': len(data), 'y': price})
         
         peak2 = data[-1]['y']
@@ -428,7 +443,7 @@ class PatternRecognitionService:
         # Breakdown
         for i in range(points_per_section * 2):
             progress = i / (points_per_section * 2)
-            price = data[-1]['y'] - (base_price * 0.08 * progress) + random.uniform(-volatility, volatility) * base_price
+            price = data[-1]['y'] - (base_price * 0.08 * scale * progress) + random.uniform(-volatility * scale, volatility * scale) * base_price
             data.append({'x': len(data), 'y': price})
         
         # Resistance line connecting peaks
@@ -449,7 +464,7 @@ class PatternRecognitionService:
         
         return data, trendlines, annotations
     
-    def _generate_double_bottom(self, base_price: float, num_points: int, volatility: float) -> Tuple[List[Dict], List[Dict], List[Dict]]:
+    def _generate_double_bottom(self, base_price: float, num_points: int, volatility: float, scale: float = 1.0) -> Tuple[List[Dict], List[Dict], List[Dict]]:
         """Generate double bottom"""
         data = []
         points_per_section = num_points // 5
@@ -463,13 +478,13 @@ class PatternRecognitionService:
         # Rally
         for i in range(points_per_section):
             progress = i / points_per_section
-            price = data[-1]['y'] + (base_price * 0.04 * progress) + random.uniform(-volatility, volatility) * base_price
+            price = data[-1]['y'] + (base_price * 0.04 * scale * progress) + random.uniform(-volatility * scale, volatility * scale) * base_price
             data.append({'x': len(data), 'y': price})
         
         # Second trough
         for i in range(points_per_section):
             progress = i / points_per_section
-            price = data[-1]['y'] - (base_price * 0.04 * progress) + random.uniform(-volatility, volatility) * base_price
+            price = data[-1]['y'] - (base_price * 0.04 * scale * progress) + random.uniform(-volatility * scale, volatility * scale) * base_price
             data.append({'x': len(data), 'y': price})
         
         # Breakout
@@ -496,7 +511,7 @@ class PatternRecognitionService:
         
         return data, trendlines, annotations
     
-    def _generate_triple_top(self, base_price: float, num_points: int, volatility: float) -> Tuple[List[Dict], List[Dict], List[Dict]]:
+    def _generate_triple_top(self, base_price: float, num_points: int, volatility: float, scale: float = 1.0) -> Tuple[List[Dict], List[Dict], List[Dict]]:
         """Generate triple top pattern"""
         data = []
         points_per_section = num_points // 7
@@ -544,7 +559,7 @@ class PatternRecognitionService:
         
         return data, trendlines, annotations
     
-    def _generate_triple_bottom(self, base_price: float, num_points: int, volatility: float) -> Tuple[List[Dict], List[Dict], List[Dict]]:
+    def _generate_triple_bottom(self, base_price: float, num_points: int, volatility: float, scale: float = 1.0) -> Tuple[List[Dict], List[Dict], List[Dict]]:
         """Generate triple bottom pattern"""
         data = []
         points_per_section = num_points // 7
@@ -592,14 +607,14 @@ class PatternRecognitionService:
         
         return data, trendlines, annotations
     
-    def _generate_ascending_triangle(self, base_price: float, num_points: int, volatility: float) -> Tuple[List[Dict], List[Dict], List[Dict]]:
+    def _generate_ascending_triangle(self, base_price: float, num_points: int, volatility: float, scale: float = 1.0) -> Tuple[List[Dict], List[Dict], List[Dict]]:
         """Generate ascending triangle with trendlines"""
         data = []
-        resistance_level = base_price * 1.05
+        resistance_level = base_price + (base_price * 0.05 * scale)
         
         for i in range(num_points):
             progress = i / num_points
-            low_level = base_price + (base_price * 0.04 * progress)
+            low_level = base_price + (base_price * 0.04 * scale * progress)
             
             if i % 10 < 5:
                 price = low_level + (resistance_level - low_level) * ((i % 10) / 5)
@@ -611,7 +626,7 @@ class PatternRecognitionService:
         
         # Breakout
         for i in range(10):
-            price = data[-1]['y'] + (base_price * 0.01 * i)
+            price = data[-1]['y'] + (base_price * 0.01 * scale * i)
             data.append({'x': len(data), 'y': price})
         
         # Trendlines: flat resistance + rising support
@@ -642,14 +657,14 @@ class PatternRecognitionService:
         
         return data, trendlines, annotations
     
-    def _generate_descending_triangle(self, base_price: float, num_points: int, volatility: float) -> Tuple[List[Dict], List[Dict], List[Dict]]:
+    def _generate_descending_triangle(self, base_price: float, num_points: int, volatility: float, scale: float = 1.0) -> Tuple[List[Dict], List[Dict], List[Dict]]:
         """Generate descending triangle"""
         data = []
-        support_level = base_price * 0.95
+        support_level = base_price - (base_price * 0.05 * scale)
         
         for i in range(num_points):
             progress = i / num_points
-            high_level = base_price - (base_price * 0.04 * progress)
+            high_level = base_price - (base_price * 0.04 * scale * progress)
             
             if i % 10 < 5:
                 price = support_level + (high_level - support_level) * ((i % 10) / 5)
@@ -661,7 +676,7 @@ class PatternRecognitionService:
         
         # Breakdown
         for i in range(10):
-            price = data[-1]['y'] - (base_price * 0.01 * i)
+            price = data[-1]['y'] - (base_price * 0.01 * scale * i)
             data.append({'x': len(data), 'y': price})
         
         trendlines = [
@@ -689,13 +704,13 @@ class PatternRecognitionService:
         
         return data, trendlines, annotations
     
-    def _generate_symmetrical_triangle(self, base_price: float, num_points: int, volatility: float) -> Tuple[List[Dict], List[Dict], List[Dict]]:
+    def _generate_symmetrical_triangle(self, base_price: float, num_points: int, volatility: float, scale: float = 1.0) -> Tuple[List[Dict], List[Dict], List[Dict]]:
         """Generate symmetrical triangle"""
         data = []
         
         for i in range(num_points):
             progress = i / num_points
-            range_size = base_price * 0.05 * (1 - progress)
+            range_size = base_price * 0.05 * scale * (1 - progress)
             
             if i % 10 < 5:
                 price = base_price + range_size * ((i % 10) / 5)
@@ -707,7 +722,7 @@ class PatternRecognitionService:
         
         # Breakout
         for i in range(10):
-            price = data[-1]['y'] + (base_price * 0.01 * i)
+            price = data[-1]['y'] + (base_price * 0.01 * scale * i)
             data.append({'x': len(data), 'y': price})
         
         trendlines = [
@@ -737,7 +752,7 @@ class PatternRecognitionService:
         
         return data, trendlines, annotations
     
-    def _generate_cup_and_handle(self, base_price: float, num_points: int, volatility: float) -> Tuple[List[Dict], List[Dict], List[Dict]]:
+    def _generate_cup_and_handle(self, base_price: float, num_points: int, volatility: float, scale: float = 1.0) -> Tuple[List[Dict], List[Dict], List[Dict]]:
         """Generate cup and handle"""
         data = []
         points_cup = int(num_points * 0.7)
@@ -746,7 +761,7 @@ class PatternRecognitionService:
         # Cup (U-shape)
         for i in range(points_cup):
             progress = i / points_cup
-            depth = -0.1 * (4 * (progress - 0.5) ** 2 - 1)
+            depth = -0.1 * scale * (4 * (progress - 0.5) ** 2 - 1)
             price = base_price + (base_price * depth) + random.uniform(-volatility, volatility) * base_price
             data.append({'x': len(data), 'y': price})
         
@@ -763,7 +778,7 @@ class PatternRecognitionService:
         
         # Breakout
         for i in range(10):
-            price = data[-1]['y'] + (base_price * 0.015 * i)
+            price = data[-1]['y'] + (base_price * 0.015 * scale * i)
             data.append({'x': len(data), 'y': price})
         
         # Neckline connecting the edges of the cup
@@ -784,7 +799,7 @@ class PatternRecognitionService:
         
         return data, trendlines, annotations
     
-    def _generate_inverse_cup_and_handle(self, base_price: float, num_points: int, volatility: float) -> Tuple[List[Dict], List[Dict], List[Dict]]:
+    def _generate_inverse_cup_and_handle(self, base_price: float, num_points: int, volatility: float, scale: float = 1.0) -> Tuple[List[Dict], List[Dict], List[Dict]]:
         """Generate inverse cup and handle"""
         data = []
         points_cup = int(num_points * 0.7)
@@ -818,14 +833,14 @@ class PatternRecognitionService:
         
         return data, trendlines, annotations
     
-    def _generate_falling_wedge(self, base_price: float, num_points: int, volatility: float) -> Tuple[List[Dict], List[Dict], List[Dict]]:
+    def _generate_falling_wedge(self, base_price: float, num_points: int, volatility: float, scale: float = 1.0) -> Tuple[List[Dict], List[Dict], List[Dict]]:
         """Generate falling wedge"""
         data = []
         
         for i in range(num_points):
             progress = i / num_points
-            high_level = base_price - (base_price * 0.03 * progress)
-            low_level = base_price - (base_price * 0.08 * progress)
+            high_level = base_price - (base_price * 0.03 * scale * progress)
+            low_level = base_price - (base_price * 0.08 * scale * progress)
             
             if i % 8 < 4:
                 price = low_level + (high_level - low_level) * ((i % 8) / 4)
@@ -865,14 +880,14 @@ class PatternRecognitionService:
         
         return data, trendlines, annotations
     
-    def _generate_rising_wedge(self, base_price: float, num_points: int, volatility: float) -> Tuple[List[Dict], List[Dict], List[Dict]]:
+    def _generate_rising_wedge(self, base_price: float, num_points: int, volatility: float, scale: float = 1.0) -> Tuple[List[Dict], List[Dict], List[Dict]]:
         """Generate rising wedge"""
         data = []
         
         for i in range(num_points):
             progress = i / num_points
-            high_level = base_price + (base_price * 0.08 * progress)
-            low_level = base_price + (base_price * 0.03 * progress)
+            high_level = base_price + (base_price * 0.08 * scale * progress)
+            low_level = base_price + (base_price * 0.03 * scale * progress)
             
             if i % 8 < 4:
                 price = low_level + (high_level - low_level) * ((i % 8) / 4)
@@ -912,7 +927,7 @@ class PatternRecognitionService:
         
         return data, trendlines, annotations
     
-    def _generate_bull_flag(self, base_price: float, num_points: int, volatility: float) -> Tuple[List[Dict], List[Dict], List[Dict]]:
+    def _generate_bull_flag(self, base_price: float, num_points: int, volatility: float, scale: float = 1.0) -> Tuple[List[Dict], List[Dict], List[Dict]]:
         """Generate bull flag with pole and flag trendlines"""
         data = []
         pole_points = int(num_points * 0.3)
@@ -921,7 +936,7 @@ class PatternRecognitionService:
         # Pole (sharp rise)
         for i in range(pole_points):
             progress = i / pole_points
-            price = base_price + (base_price * 0.12 * progress) + random.uniform(-volatility, volatility) * base_price
+            price = base_price + (base_price * 0.12 * scale * progress) + random.uniform(-volatility * scale, volatility * scale) * base_price
             data.append({'x': len(data), 'y': price})
         
         pole_top = data[-1]['y']
@@ -931,7 +946,7 @@ class PatternRecognitionService:
         flag_start = data[-1]['y']
         for i in range(flag_points):
             progress = i / flag_points
-            price = flag_start - (flag_start * 0.03 * progress) + random.uniform(-volatility, volatility) * base_price
+            price = flag_start - (flag_start * 0.03 * scale * progress) + random.uniform(-volatility * scale, volatility * scale) * base_price
             data.append({'x': len(data), 'y': price})
         
         flag_end = data[-1]['y']
@@ -939,7 +954,7 @@ class PatternRecognitionService:
         
         # Breakout continuation
         for i in range(10):
-            price = data[-1]['y'] + (base_price * 0.02 * i)
+            price = data[-1]['y'] + (base_price * 0.02 * scale * i)
             data.append({'x': len(data), 'y': price})
         
         # Trendlines for flag channel
@@ -971,7 +986,7 @@ class PatternRecognitionService:
         
         return data, trendlines, annotations
     
-    def _generate_bear_flag(self, base_price: float, num_points: int, volatility: float) -> Tuple[List[Dict], List[Dict], List[Dict]]:
+    def _generate_bear_flag(self, base_price: float, num_points: int, volatility: float, scale: float = 1.0) -> Tuple[List[Dict], List[Dict], List[Dict]]:
         """Generate bear flag"""
         data = []
         pole_points = int(num_points * 0.3)
@@ -980,7 +995,7 @@ class PatternRecognitionService:
         # Pole (sharp drop)
         for i in range(pole_points):
             progress = i / pole_points
-            price = base_price - (base_price * 0.12 * progress) + random.uniform(-volatility, volatility) * base_price
+            price = base_price - (base_price * 0.12 * scale * progress) + random.uniform(-volatility * scale, volatility * scale) * base_price
             data.append({'x': len(data), 'y': price})
         
         pole_bottom = data[-1]['y']
@@ -990,7 +1005,7 @@ class PatternRecognitionService:
         flag_start = data[-1]['y']
         for i in range(flag_points):
             progress = i / flag_points
-            price = flag_start + (flag_start * 0.03 * progress) + random.uniform(-volatility, volatility) * base_price
+            price = flag_start + (flag_start * 0.03 * scale * progress) + random.uniform(-volatility * scale, volatility * scale) * base_price
             data.append({'x': len(data), 'y': price})
         
         flag_end = data[-1]['y']
@@ -998,7 +1013,7 @@ class PatternRecognitionService:
         
         # Breakdown continuation
         for i in range(10):
-            price = data[-1]['y'] - (base_price * 0.02 * i)
+            price = data[-1]['y'] - (base_price * 0.02 * scale * i)
             data.append({'x': len(data), 'y': price})
         
         trendlines = [
@@ -1026,7 +1041,7 @@ class PatternRecognitionService:
         
         return data, trendlines, annotations
     
-    def _generate_pennant(self, base_price: float, num_points: int, volatility: float) -> Tuple[List[Dict], List[Dict], List[Dict]]:
+    def _generate_pennant(self, base_price: float, num_points: int, volatility: float, scale: float = 1.0) -> Tuple[List[Dict], List[Dict], List[Dict]]:
         """Generate pennant"""
         data = []
         pole_points = int(num_points * 0.3)
@@ -1062,7 +1077,7 @@ class PatternRecognitionService:
         
         return data, trendlines, annotations
     
-    def _generate_rounding_bottom(self, base_price: float, num_points: int, volatility: float) -> Tuple[List[Dict], List[Dict], List[Dict]]:
+    def _generate_rounding_bottom(self, base_price: float, num_points: int, volatility: float, scale: float = 1.0) -> Tuple[List[Dict], List[Dict], List[Dict]]:
         """Generate rounding bottom"""
         data = []
         
@@ -1074,7 +1089,7 @@ class PatternRecognitionService:
         
         # Continuation upward
         for i in range(10):
-            price = data[-1]['y'] + (base_price * 0.01 * i)
+            price = data[-1]['y'] + (base_price * 0.01 * scale * i)
             data.append({'x': len(data), 'y': price})
         
         trendlines = []
@@ -1084,7 +1099,7 @@ class PatternRecognitionService:
         
         return data, trendlines, annotations
     
-    def _generate_rounding_top(self, base_price: float, num_points: int, volatility: float) -> Tuple[List[Dict], List[Dict], List[Dict]]:
+    def _generate_rounding_top(self, base_price: float, num_points: int, volatility: float, scale: float = 1.0) -> Tuple[List[Dict], List[Dict], List[Dict]]:
         """Generate rounding top"""
         data = []
         
@@ -1106,7 +1121,7 @@ class PatternRecognitionService:
         
         return data, trendlines, annotations
     
-    def _generate_rectangle(self, base_price: float, num_points: int, volatility: float) -> Tuple[List[Dict], List[Dict], List[Dict]]:
+    def _generate_rectangle(self, base_price: float, num_points: int, volatility: float, scale: float = 1.0) -> Tuple[List[Dict], List[Dict], List[Dict]]:
         """Generate rectangle consolidation"""
         data = []
         resistance = base_price * 1.03
@@ -1123,7 +1138,7 @@ class PatternRecognitionService:
         
         # Breakout
         for i in range(10):
-            price = data[-1]['y'] + (base_price * 0.01 * i)
+            price = data[-1]['y'] + (base_price * 0.01 * scale * i)
             data.append({'x': len(data), 'y': price})
         
         trendlines = [
@@ -1151,7 +1166,7 @@ class PatternRecognitionService:
         
         return data, trendlines, annotations
     
-    def _generate_broadening_top(self, base_price: float, num_points: int, volatility: float) -> Tuple[List[Dict], List[Dict], List[Dict]]:
+    def _generate_broadening_top(self, base_price: float, num_points: int, volatility: float, scale: float = 1.0) -> Tuple[List[Dict], List[Dict], List[Dict]]:
         """Generate broadening top (megaphone)"""
         data = []
         
@@ -1177,7 +1192,7 @@ class PatternRecognitionService:
         
         return data, trendlines, annotations
     
-    def _generate_broadening_bottom(self, base_price: float, num_points: int, volatility: float) -> Tuple[List[Dict], List[Dict], List[Dict]]:
+    def _generate_broadening_bottom(self, base_price: float, num_points: int, volatility: float, scale: float = 1.0) -> Tuple[List[Dict], List[Dict], List[Dict]]:
         """Generate broadening bottom"""
         data = []
         
@@ -1203,7 +1218,7 @@ class PatternRecognitionService:
         
         return data, trendlines, annotations
     
-    def _generate_diamond_top(self, base_price: float, num_points: int, volatility: float) -> Tuple[List[Dict], List[Dict], List[Dict]]:
+    def _generate_diamond_top(self, base_price: float, num_points: int, volatility: float, scale: float = 1.0) -> Tuple[List[Dict], List[Dict], List[Dict]]:
         """Generate diamond top"""
         data = []
         half_points = num_points // 2
@@ -1244,7 +1259,7 @@ class PatternRecognitionService:
         
         return data, trendlines, annotations
     
-    def _generate_diamond_bottom(self, base_price: float, num_points: int, volatility: float) -> Tuple[List[Dict], List[Dict], List[Dict]]:
+    def _generate_diamond_bottom(self, base_price: float, num_points: int, volatility: float, scale: float = 1.0) -> Tuple[List[Dict], List[Dict], List[Dict]]:
         """Generate diamond bottom"""
         data = []
         half_points = num_points // 2
