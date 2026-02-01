@@ -5,20 +5,55 @@ import os
 from datetime import datetime
 
 # Database setup
-# SQLite for local development, PostgreSQL for production
-# If DATABASE_URL starts with 'postgres://', change it to 'postgresql://' for SQLAlchemy 1.4+
+# SQLite for local development/fallback, PostgreSQL for production
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./nunno.db")
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-# For SQLite, we need check_same_thread=False. For Postgres, we don't.
+# Configuration for different database types
 engine_args = {}
 if DATABASE_URL.startswith("sqlite"):
     engine_args["connect_args"] = {"check_same_thread": False}
+else:
+    # For Postgres, add pool settings and reasonable timeouts
+    engine_args.update({
+        "pool_pre_ping": True,
+        "pool_recycle": 3600,
+        "connect_args": {
+            "connect_timeout": 10
+        }
+    })
 
-engine = create_engine(DATABASE_URL, **engine_args)
+try:
+    print(f"DEBUG: Attempting to connect to database...")
+    # Hide password in logs
+    masked_url = DATABASE_URL
+    if "@" in masked_url:
+        start = masked_url.find("://") + 3
+        end = masked_url.find("@")
+        masked_url = masked_url[:start] + "****" + masked_url[end:]
+    print(f"DEBUG: Using URL: {masked_url}")
+    
+    engine = create_engine(DATABASE_URL, **engine_args)
+    # Test connection immediately
+    with engine.connect() as conn:
+        print("✅ Database connection verified successfully!")
+except Exception as e:
+    print(f"❌ DATABASE CONNECTION ERROR: {str(e)}")
+    print("⚠️  Warning: Could not connect to the specified DATABASE_URL.")
+    
+    # If connection fails and it's not already SQLite, try falling back to SQLite
+    # This ensures the app can at least start on platforms like Hugging Face
+    if not DATABASE_URL.startswith("sqlite"):
+        print("🔄 Falling back to local SQLite (nunno.db) to allow app startup...")
+        DATABASE_URL = "sqlite:///./nunno.db"
+        engine_args = {"connect_args": {"check_same_thread": False}}
+        engine = create_engine(DATABASE_URL, **engine_args)
+    else:
+        # If even SQLite fails (unlikely), re-raise
+        raise e
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
 Base = declarative_base()
 
 class User(Base):
