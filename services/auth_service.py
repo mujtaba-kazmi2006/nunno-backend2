@@ -1,26 +1,39 @@
 """
-Authentication Service with JWT
-Handles user signup, login, and token verification
+Authentication Service with Direct Bcrypt
+Fixed for Python 3.13/Passlib compatibility issues
 """
 
+import bcrypt
 from datetime import datetime, timedelta
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 import os
 
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "nunno-finance-secret-key-change-in-production-2026")
+SECRET_KEY = os.getenv("JWT_SECRET_KEY", "nunno-finance-production-secret-2026")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
 def hash_password(password: str) -> str:
-    """Hash a password for storing"""
-    return pwd_context.hash(password)
+    """Hash a password using direct bcrypt (Fixed for Python 3.13)"""
+    # Bcrypt has a 72-byte limit. We encode to bytes first.
+    password_bytes = password.encode('utf-8')
+    # Truncate to 72 if necessary to prevent internal bcrypt errors
+    if len(password_bytes) > 72:
+        password_bytes = password_bytes[:72]
+        
+    salt = bcrypt.gensalt()
+    hashed = bcrypt.hashpw(password_bytes, salt)
+    return hashed.decode('utf-8')
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a password against its hash"""
-    return pwd_context.verify(plain_password, hashed_password)
+    try:
+        password_bytes = plain_password.encode('utf-8')
+        if len(password_bytes) > 72:
+            password_bytes = password_bytes[:72]
+            
+        return bcrypt.checkpw(password_bytes, hashed_password.encode('utf-8'))
+    except Exception:
+        return False
 
 def create_access_token(data: dict):
     """Create a JWT access token"""

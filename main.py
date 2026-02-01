@@ -23,7 +23,7 @@ print("DEBUG: Starting Nunno Finance Backend...")
 # Import database and auth
 from database import init_db, get_db, User, Prediction
 from services.auth_service import create_access_token, verify_token, hash_password, verify_password
-from services.usage_service import can_user_search, log_usage, get_tier_limits
+from services.usage_service import can_user_search, log_search, get_tier_config
 
 # Import services
 from services.technical_analysis import TechnicalAnalysisService
@@ -77,15 +77,25 @@ security = HTTPBearer(auto_error=False) # Allow optional auth
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security), db = Depends(get_db)):
     """Get current authenticated user from JWT token"""
     if not credentials:
+        print("❌ AUTH ERROR: No credentials provided")
         raise HTTPException(status_code=401, detail="Authentication required")
         
     token = credentials.credentials
     payload = verify_token(token)
     if not payload:
+        print("❌ AUTH ERROR: Token verification failed")
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     
-    user = db.query(User).filter(User.id == payload.get("user_id")).first()
+    # Cast to int for Postgres strictness
+    try:
+        user_id = int(payload.get("user_id"))
+        user = db.query(User).filter(User.id == user_id).first()
+    except (ValueError, TypeError):
+        print(f"❌ AUTH ERROR: Invalid user_id format in token: {payload.get('user_id')}")
+        raise HTTPException(status_code=401, detail="Invalid token format")
+        
     if not user:
+        print(f"❌ AUTH ERROR: User {user_id} not found in DB")
         raise HTTPException(status_code=401, detail="User not found")
     return user
 
@@ -99,8 +109,12 @@ def get_optional_current_user(credentials: HTTPAuthorizationCredentials = Depend
     if not payload:
         return None
     
-    user = db.query(User).filter(User.id == payload.get("user_id")).first()
-    return user
+    try:
+        user_id = int(payload.get("user_id"))
+        user = db.query(User).filter(User.id == user_id).first()
+        return user
+    except:
+        return None
 
 # Initialize services with error handling
 try:
@@ -139,9 +153,8 @@ class LoginRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
-    user_name: str = "User"
+    conversation_id: str # Required for history separation
     user_age: int = 18
-    conversation_history: Optional[List[Dict[str, str]]] = []
 
 class ChatResponse(BaseModel):
     response: str
@@ -161,65 +174,103 @@ async def root():
 
 @app.post("/api/auth/signup")
 async def signup(request: SignupRequest, db = Depends(get_db)):
-    """Register a new user"""
-    # Check if user exists
-    existing = db.query(User).filter(User.email == request.email).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="Email already registered")
-    
-    # Create user
-    user = User(
-        email=request.email,
-        password_hash=hash_password(request.password),
-        name=request.name,
-        tier="free",
-        tokens_remaining=1000
-    )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-    
-    # Create token
-    token = create_access_token({"user_id": str(user.id), "email": user.email})
-    
-    return {
-        "token": token,
-        "user": {
-            "id": str(user.id),
-            "email": user.email,
-            "name": user.name,
-            "tier": user.tier,
-            "tokens_remaining": user.tokens_remaining,
-            "searches_today": user.searches_today
+    """Register a new user with robust defaults"""
+    try:
+        # Check if user exists
+        existing = db.query(User).filter(User.email == request.email).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Email already registered")
+        
+        from datetime import datetime
+        # Create user with all scaling columns initialized
+        user = User(
+            email=request.email,
+            password_hash=hash_password(request.password),
+            name=request.name,
+            tier="free",
+            tokens_remaining=10000,
+            tokens_used_today=0,
+            searches_today=0,
+            last_reset=datetime.utcnow()
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        
+        # Create token
+        token = create_access_token({"user_id": str(user.id), "email": user.email})
+        
+        # Get tier limits
+        from services.usage_service import get_tier_config
+        limits = get_tier_config(user.tier)
+        
+        print(f"✅ Successful signup for: {user.email}")
+        return {
+            "token": token,
+            "user": {
+                "id": str(user.id),
+                "email": user.email,
+                "name": user.name,
+                "tier": user.tier,
+                "tokens_remaining": user.tokens_remaining,
+                "searches_today": user.searches_today,
+                "tokens_used_today": user.tokens_used_today,
+                "limits": limits
+            }
         }
-    }
+    except Exception as e:
+        print(f"❌ SIGNUP ERROR: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Signup failed: {str(e)}")
 
 @app.post("/api/auth/login")
 async def login(request: LoginRequest, db = Depends(get_db)):
-    """Login existing user"""
-    user = db.query(User).filter(User.email == request.email).first()
-    if not user or not verify_password(request.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-    
-    token = create_access_token({"user_id": str(user.id), "email": user.email})
-    
-    return {
-        "token": token,
-        "user": {
-            "id": str(user.id),
-            "email": user.email,
-            "name": user.name,
-            "tier": user.tier,
-            "tokens_remaining": user.tokens_remaining,
-            "searches_today": user.searches_today
+    """Login existing user with full profile return"""
+    try:
+        user = db.query(User).filter(User.email == request.email).first()
+        if not user:
+            print(f"❌ LOGIN AUTH ERROR: Email {request.email} not found")
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+            
+        if not verify_password(request.password, user.password_hash):
+            print(f"❌ LOGIN AUTH ERROR: Password mismatch for {request.email}")
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+        
+        token = create_access_token({"user_id": str(user.id), "email": user.email})
+        
+        # Get tier limits
+        limits = get_tier_config(user.tier)
+        
+        print(f"✅ SUCCESS: Logged in {user.email} (ID: {user.id})")
+        return {
+            "token": token,
+            "user": {
+                "id": str(user.id),
+                "email": user.email,
+                "name": user.name,
+                "tier": user.tier,
+                "tokens_remaining": user.tokens_remaining,
+                "tokens_used_today": user.tokens_used_today,
+                "searches_today": user.searches_today,
+                "limits": limits
+            }
         }
-    }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ LOGIN CRITICAL ERROR: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Internal server error during login")
 
+@app.get("/api/v1/me")
 @app.get("/api/auth/me")
 async def get_me(current_user: User = Depends(get_current_user), db = Depends(get_db)):
     """Get current user info"""
     # Get tier limits
-    limits = get_tier_limits(current_user.tier)
+    limits = get_tier_config(current_user.tier)
     
     return {
         "id": str(current_user.id),
@@ -227,6 +278,7 @@ async def get_me(current_user: User = Depends(get_current_user), db = Depends(ge
         "name": current_user.name,
         "tier": current_user.tier,
         "tokens_remaining": current_user.tokens_remaining,
+        "tokens_used_today": current_user.tokens_used_today,
         "searches_today": current_user.searches_today,
         "limits": limits
     }
@@ -234,17 +286,16 @@ async def get_me(current_user: User = Depends(get_current_user), db = Depends(ge
 # ==================== EXISTING ENDPOINTS ====================
 
 @app.get("/api/v1/technical/{ticker}")
-async def get_technical_analysis(ticker: str, interval: str = "15m"):
+async def get_technical_analysis(ticker: str, interval: str = "15m", current_user: Optional[User] = Depends(get_optional_current_user), db = Depends(get_db)):
     """
-    Get technical analysis for a cryptocurrency
-    
-    Args:
-        ticker: Trading pair (e.g., BTCUSDT)
-        interval: Timeframe (e.g., 15m, 1h, 4h, 1d)
-    
-    Returns:
-        Technical analysis with beginner-friendly explanations
+    Get technical analysis for a cryptocurrency (Quota limited for authenticated users)
     """
+    if current_user:
+        from services.usage_service import can_user_search, log_search
+        if not can_user_search(current_user, db):
+            raise HTTPException(status_code=402, detail="Daily technical analysis limit reached.")
+        log_search(current_user.id, db)
+        
     try:
         result = technical_service.analyze(ticker, interval)
         return result
@@ -439,46 +490,55 @@ async def get_price_history(ticker: str, timeframe: str = "24H"):
             "is_mock": True
         }
 
+@app.get("/api/v1/conversations")
+async def get_conversations(current_user: User = Depends(get_current_user), db = Depends(get_db)):
+    """List user chats"""
+    conversations = db.query(Conversation).filter(Conversation.user_id == current_user.id).order_by(Conversation.created_at.desc()).all()
+    return [{
+        "id": c.id,
+        "title": c.title,
+        "created_at": c.created_at
+    } for c in conversations]
+
 @app.post("/api/v1/chat")
-async def chat(request: ChatRequest):
-    """
-    Chat with Nunno AI - The Empathetic Financial Educator
+async def chat(request: ChatRequest, current_user: User = Depends(get_current_user), db = Depends(get_db)):
+    """Authenticated Chat with Quota Management"""
+    from services.usage_service import can_user_chat
     
-    This endpoint orchestrates tool calls and provides beginner-friendly responses
-    """
-    if not chat_service:
-        raise HTTPException(status_code=503, detail="Chat service unavailable (initialization failed)")
+    # 1. Check Quota
+    if not can_user_chat(current_user, db):
+        raise HTTPException(status_code=402, detail="Daily token limit reached. Upgrade to Pro for more!")
+
+    # 2. Process
     try:
         response = await chat_service.process_message(
             message=request.message,
-            user_name=request.user_name,
-            user_age=request.user_age,
-            conversation_history=request.conversation_history
+            user=current_user,
+            conversation_id=request.conversation_id,
+            db=db,
+            user_age=request.user_age
         )
         return response
     except Exception as e:
-        print(f"Chat error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/v1/chat/stream")
-async def chat_stream(request: ChatRequest):
-    """
-    Streaming chat endpoint for real-time responses
-    """
-    if not chat_service:
-        raise HTTPException(status_code=503, detail="Chat service unavailable")
-    try:
-        return StreamingResponse(
-            chat_service.stream_message(
-                message=request.message,
-                user_name=request.user_name,
-                user_age=request.user_age,
-                conversation_history=request.conversation_history
-            ),
-            media_type="text/event-stream"
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+async def chat_stream(request: ChatRequest, current_user: User = Depends(get_current_user), db = Depends(get_db)):
+    """Streaming Chat with Quota Management"""
+    from services.usage_service import can_user_chat
+    if not can_user_chat(current_user, db):
+        raise HTTPException(status_code=402, detail="Daily token limit reached.")
+
+    return StreamingResponse(
+        chat_service.stream_message(
+            message=request.message,
+            user=current_user,
+            conversation_id=request.conversation_id,
+            db=db,
+            user_age=request.user_age
+        ),
+        media_type="text/event-stream"
+    )
 
 # ==================== FEED NUNNO ENDPOINT ====================
 
@@ -488,18 +548,21 @@ class FeedNunnoRequest(BaseModel):
     user_name: str = "User"
 
 @app.post("/api/v1/analyze/feed-nunno")
-async def feed_nunno(request: FeedNunnoRequest):
+async def feed_nunno(request: FeedNunnoRequest, current_user: User = Depends(get_current_user), db = Depends(get_db)):
     """
-    Feed Nunno - Comprehensive Market Intelligence Report
+    Feed Nunno - Comprehensive Market Intelligence Report (Authenticated)
+    """
+    from services.usage_service import can_user_search, log_search
     
-    This endpoint:
-    1. Fetches macro news (FED, regulations, major crypto events)
-    2. Gets multi-timeframe technical analysis (15m, 1h, 4h, 1d)
-    3. Calculates market metrics and volatility
-    4. Streams a detailed, fact-based intelligence report
-    """
+    # 1. Quota Check (This is an expensive search-like operation)
+    if not can_user_search(current_user, db):
+        raise HTTPException(status_code=402, detail="Daily intelligence report limit reached.")
+
     if not chat_service or not technical_service or not news_service:
         raise HTTPException(status_code=503, detail="Required services unavailable")
+    
+    # Log usage
+    log_search(current_user.id, db)
     
     try:
         async def generate_feed_report():
