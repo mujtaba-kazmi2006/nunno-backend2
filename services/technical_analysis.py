@@ -11,10 +11,10 @@ import os
 # Import the existing TradingAnalyzer class from the services package
 # This ensures we use the real module, not a mock
 try:
-    from services.betterpredictormodule import TradingAnalyzer
+    from services.betterpredictormodule import TradingAnalyzer, ScenarioGenerator
 except ImportError:
     # Fallback for local testing if run directly
-    from .betterpredictormodule import TradingAnalyzer
+    from .betterpredictormodule import TradingAnalyzer, ScenarioGenerator
 
 class TechnicalAnalysisService:
     """
@@ -34,6 +34,59 @@ class TechnicalAnalysisService:
             print(f"⚠️ Failed to apply ML enhancement: {e}")
 
         self.analyzer = TradingAnalyzer()
+        self.simulator = ScenarioGenerator(self.analyzer)
+    
+    def simulate_scenario(self, ticker: str, injection_type: str, interval: str = "15m"):
+        """
+        Generate a specific injected market scenario
+        """
+        try:
+            df = self.analyzer.fetch_binance_ohlcv(symbol=ticker, interval=interval, limit=100)
+            df = self.analyzer.add_comprehensive_indicators(df)
+            latest_row = df.iloc[-1]
+            
+            last_price = float(latest_row['Close'])
+            atr = float(latest_row['ATR'])
+            key_levels = {
+                "support": float(latest_row['S1']),
+                "resistance": float(latest_row['R1'])
+            }
+            
+            path, meta = self.simulator.generate_regime_injection(injection_type, last_price, atr, key_levels)
+            return {
+                "ticker": ticker,
+                "injection_type": injection_type,
+                "path": path,
+                "meta": meta,
+                "last_price": last_price
+            }
+        except Exception as e:
+            raise Exception(f"Simulation failed: {str(e)}")
+
+    def get_monte_carlo(self, ticker: str, interval: str = "15m"):
+        """
+        Generate Monte Carlo probability fan
+        """
+        try:
+            df = self.analyzer.fetch_binance_ohlcv(symbol=ticker, interval=interval, limit=100)
+            df = self.analyzer.add_comprehensive_indicators(df)
+            latest_row = df.iloc[-1]
+            
+            last_price = float(latest_row['Close'])
+            atr = float(latest_row['ATR'])
+            market_regime = self.analyzer.classify_market_regime(df, latest_row)['regime']
+            
+            fan_data = self.simulator.generate_monte_carlo_paths(last_price, atr, market_regime)
+            return {
+                "ticker": ticker,
+                "market_regime": market_regime,
+                "fan": fan_data["fan"],
+                "paths": fan_data["paths"],
+                "meta": fan_data["meta"],
+                "last_price": last_price
+            }
+        except Exception as e:
+            raise Exception(f"Monte Carlo generation failed: {str(e)}")
     
     def analyze(self, ticker: str, interval: str = "15m"):
         """

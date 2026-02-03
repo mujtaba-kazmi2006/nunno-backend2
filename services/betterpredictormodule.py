@@ -1760,6 +1760,160 @@ class EnhancedCryptoPredictor:
                 
         return "\n".join(explanation)
 
+
+class ScenarioGenerator:
+    """
+    Simulation Engine 2.0
+    Generates realistic market scenarios and Monte Carlo probability paths
+    """
+    def __init__(self, analyzer: TradingAnalyzer):
+        self.analyzer = analyzer
+
+    def generate_monte_carlo_paths(self, last_price: float, atr: float, market_regime: str, num_paths: int = 50, steps: int = 30):
+        """
+        Generate multiple possible paths based on current volatility and regime
+        """
+        # Handle cases where ATR might be zero or None
+        if not atr or atr <= 0:
+            atr = last_price * 0.01 
+            
+        volatility = atr / last_price
+        paths = []
+        
+        # Adjust drift and vol based on regime
+        drift = 0
+        vol_mult = 1.0
+        
+        regime_lower = market_regime.lower()
+        if "bull" in regime_lower:
+            drift = 0.001  # Slight upward pressure per step
+            vol_mult = 1.1
+        elif "bear" in regime_lower:
+            drift = -0.001
+            vol_mult = 1.1
+        elif "volatile" in regime_lower:
+            vol_mult = 1.8
+        elif "range" in regime_lower or "consolidation" in regime_lower:
+            vol_mult = 0.6
+            drift = 0
+        
+        for p in range(num_paths):
+            current_path = [{"time": 0, "value": last_price}]
+            price = last_price
+            for s in range(1, steps + 1):
+                # Random walk with regime-adjusted parameters
+                # Use a slightly mean-reverting component for 'range' markets
+                if "range" in regime_lower or "consolidation" in regime_lower:
+                    reversion = (last_price - price) * 0.1
+                    change_pct = reversion / last_price + np.random.normal(0, volatility * vol_mult)
+                else:
+                    change_pct = drift + np.random.normal(0, volatility * vol_mult)
+                
+                price = price * (1 + change_pct)
+                current_path.append({"time": s, "value": price})
+            paths.append(current_path)
+            
+        # Calculate percentiles for "Heat Fan"
+        steps_data = [[] for _ in range(steps + 1)]
+        for path in paths:
+            for s, point in enumerate(path):
+                steps_data[s].append(point["value"])
+        
+        fan_data = []
+        for s in range(steps + 1):
+            prices = steps_data[s]
+            fan_data.append({
+                "time": s,
+                "p25": float(np.percentile(prices, 25)),
+                "p50": float(np.percentile(prices, 50)),
+                "p75": float(np.percentile(prices, 75)),
+                "min": float(np.min(prices)),
+                "max": float(np.max(prices))
+            })
+            
+        return {
+            "paths": paths[:10], # Return a subset of paths to save bandwidth
+            "fan": fan_data,
+            "meta": {
+                "steps": steps,
+                "num_paths": num_paths,
+                "regime": market_regime,
+                "vol_multiplier": vol_mult,
+                "volatility_used": volatility
+            }
+        }
+
+    def generate_regime_injection(self, injection_type: str, last_price: float, atr: float, key_levels: dict):
+        """
+        Generate a specific curated scenario based on PRD 2.0 injectors
+        """
+        steps = 40
+        path = [{"time": 0, "value": last_price}]
+        
+        support = key_levels.get("support")
+        resistance = key_levels.get("resistance")
+        
+        # Sane Defaults if levels are 0 or missing
+        if not support or support <= 0 or support >= last_price:
+            support = last_price * 0.985
+        if not resistance or resistance <= 0 or resistance <= last_price:
+            resistance = last_price * 1.015
+            
+        vol = max(atr / last_price, 0.01) # Minimum 1% vol for simulation wiggles
+        
+        current_price = last_price
+        
+        if injection_type == "bullish_breakout":
+            # Scenario: Approach resistance, consolidate, then explosive break
+            for s in range(1, steps + 1):
+                if s < 15: # Approach & Consolidate
+                    target = resistance * 0.995
+                    current_price += (target - current_price) * 0.2 + np.random.normal(0, vol * 0.3) * current_price
+                elif s == 15: # The Break
+                    current_price = resistance * 1.01
+                else: # Continuation
+                    current_price *= (1 + 0.005 + np.random.normal(0, vol * 0.8))
+                path.append({"time": s, "value": current_price})
+                
+        elif injection_type == "black_swan":
+            # Scenario: Sudden drop, liquidity grab, slow recovery
+            for s in range(1, steps + 1):
+                if s == 5: # The Crash
+                    current_price *= 0.90 
+                elif 5 < s < 10: # Panic/Bottoming
+                    current_price *= (1 + np.random.normal(-0.01, vol * 2))
+                else: # Slow recovery
+                    current_price *= (1 + 0.002 + np.random.normal(0, vol * 0.5))
+                path.append({"time": s, "value": current_price})
+        
+        elif injection_type == "institutional_flush":
+            # Scenario: Fake out above resistance, then flush down to support
+            for s in range(1, steps + 1):
+                if s < 10: # Move to resistance
+                    current_price += (resistance - current_price) * 0.3
+                elif s == 10: # Fake out
+                    current_price = resistance * 1.015
+                elif 10 < s < 25: # The Flush
+                    current_price += (support - current_price) * 0.2
+                else: # Consolidate at support
+                    current_price += (support - current_price) * 0.1 + np.random.normal(0, vol * 0.2) * current_price
+                path.append({"time": s, "value": current_price})
+        
+        else: # Default random walk
+            for s in range(1, steps + 1):
+                current_price *= (1 + np.random.normal(0, vol))
+                path.append({"time": s, "value": current_price})
+                
+        # Description and metadata
+        meta = {
+            "steps": steps,
+            "volatility_used": vol,
+            "support_used": support,
+            "resistance_used": resistance
+        }
+        
+        return path, meta
+
 def main():
     """Enhanced main program with 3-layer analysis"""
     

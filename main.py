@@ -309,6 +309,28 @@ async def get_technical_analysis(ticker: str, interval: str = "15m", current_use
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/v1/simulate/monte-carlo/{ticker}")
+async def get_monte_carlo_simulation(ticker: str, interval: str = "15m"):
+    """Get Monte Carlo probability fan for a ticker (Elite Chart 2.0)"""
+    try:
+        if not technical_service:
+            raise HTTPException(status_code=503, detail="Technical service unavailable")
+        return technical_service.get_monte_carlo(ticker.upper(), interval)
+    except Exception as e:
+        print(f"Simulation Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/v1/simulate/regime/{ticker}")
+async def get_regime_simulation(ticker: str, type: str, interval: str = "15m"):
+    """Get specific regime-injected simulation path (Elite Chart 2.0)"""
+    try:
+        if not technical_service:
+            raise HTTPException(status_code=503, detail="Technical service unavailable")
+        return technical_service.simulate_scenario(ticker.upper(), type, interval)
+    except Exception as e:
+        print(f"Regime Simulation Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/v1/tokenomics/{coin_id}")
 async def get_tokenomics(coin_id: str, investment_amount: float = 1000):
     """
