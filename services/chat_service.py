@@ -31,7 +31,9 @@ class ChatService:
         )
         
         from services.technical_analysis import TechnicalAnalysisService
+        from services.tokenomics_service import TokenomicsService
         self.technical_service = TechnicalAnalysisService()
+        self.tokenomics_service = TokenomicsService()
     
     def _get_system_prompt(self, user_name: str, user_age: int) -> str:
         """Enhanced system prompt"""
@@ -169,13 +171,24 @@ For OTHER questions:
         tool_data = {}
         if tools_to_call:
             yield f"data: {json.dumps({'type': 'status', 'content': '🔍 Analyzing data...'})}\n\n"
-            for _, params in tools_to_call:
-                result = await asyncio.get_event_loop().run_in_executor(
-                    None, self.technical_service.analyze, params["ticker"], params.get("interval", "15m")
-                )
-                if result:
-                    tool_data["technical"] = result
-                    yield f"data: {json.dumps({'type': 'data', 'tool_calls': ['technical_analysis'], 'data_used': tool_data})}\n\n"
+            for tool_name, params in tools_to_call:
+                if tool_name == "technical_analysis":
+                    result = await asyncio.get_event_loop().run_in_executor(
+                        None, self.technical_service.analyze, params["ticker"], params.get("interval", "15m")
+                    )
+                    if result:
+                        tool_data["technical"] = result
+                        yield f"data: {json.dumps({'type': 'data', 'tool_calls': ['technical_analysis'], 'data_used': tool_data})}\n\n"
+                elif tool_name == "tokenomics":
+                    # Map ticker to coingecko id
+                    symbol = params["ticker"].replace("USDT", "").lower()
+                    coin_id = self.technical_service.analyzer._symbol_to_coingecko_id(params["ticker"]) or symbol
+                    result = await asyncio.get_event_loop().run_in_executor(
+                        None, self.tokenomics_service.analyze, coin_id
+                    )
+                    if result:
+                        tool_data["tokenomics"] = result
+                        yield f"data: {json.dumps({'type': 'data', 'tool_calls': ['tokenomics_analysis'], 'data_used': tool_data})}\n\n"
 
         messages = [{"role": "system", "content": self._get_system_prompt(user.name, user_age)}]
         messages.extend(history)
@@ -212,16 +225,24 @@ For OTHER questions:
             yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
 
     async def _detect_prediction_request(self, message: str) -> List[tuple]:
-        """Detect ONLY prediction requests"""
+        """Detect prediction or tokenomics requests"""
         message_lower = message.lower()
-        prediction_keywords = ["predict", "prediction", "forecast", "will it go up", "price target", "technical analysis"]
+        prediction_keywords = ["predict", "prediction", "forecast", "will it go up", "price target", "technical analysis", "price chat", "analyze chart"]
+        tokenomics_keywords = ["tokenomics", "supply", "total supply", "circulating supply", "allocation", "distribution", "utility", "burn"]
         
+        results = []
+        ticker = self._extract_ticker(message_lower)
+        if not ticker:
+            return []
+
         if any(keyword in message_lower for keyword in prediction_keywords):
-            ticker = self._extract_ticker(message_lower)
-            if ticker:
-                interval = self._extract_interval(message_lower)
-                return [("technical_analysis", {"ticker": ticker, "interval": interval})]
-        return []
+            interval = self._extract_interval(message_lower)
+            results.append(("technical_analysis", {"ticker": ticker, "interval": interval}))
+            
+        if any(keyword in message_lower for keyword in tokenomics_keywords):
+            results.append(("tokenomics", {"ticker": ticker}))
+            
+        return results
 
     def _extract_interval(self, message_lower: str) -> str:
         intervals = {"1m": ["1m", "1 min"], "15m": ["15m", "15 min"], "1h": ["1h", "1 hour"], "1d": ["1d", "daily"]}
@@ -231,14 +252,58 @@ For OTHER questions:
         return "15m"
 
     def _extract_ticker(self, message_lower: str) -> Optional[str]:
-        tickers = {"bitcoin": "BTCUSDT", "btc": "BTCUSDT", "eth": "ETHUSDT", "sol": "SOLUSDT"}
-        for name, ticker in tickers.items():
+        import re
+        
+        # 1. Look for $TICKER or "TICKER" or "TICKERUSDT"
+        # Matches 2-10 uppercase letters optionally preceded by $
+        # We also check lowercase since message_lower is used
+        matches = re.findall(r'\$?([a-z]{2,10})', message_lower)
+        
+        # Common coins mapping for aliases
+        aliases = {
+            "bitcoin": "BTCUSDT", 
+            "ethereum": "ETHUSDT", 
+            "solana": "SOLUSDT",
+            "cardano": "ADAUSDT",
+            "ripple": "XRPUSDT",
+            "dogecoin": "DOGEUSDT",
+            "polkadot": "DOTUSDT"
+        }
+        
+        # Check aliases first
+        for name, ticker in aliases.items():
             if name in message_lower:
                 return ticker
+                
+        # Known exclusions (words that look like tickers but aren't)
+        exclusions = {"the", "and", "for", "with", "this", "that", "from", "price", "predict", "analysis"}
+        
+        if matches:
+            for match in matches:
+                if match in exclusions:
+                    continue
+                
+                ticker = match.upper()
+                
+                # If it already ends with USDT or USD, return it
+                if ticker.endswith("USDT") or ticker.endswith("USD"):
+                    return ticker
+                
+                # Default to USDT suffix as it's most common on Binance
+                return f"{ticker}USDT"
+                
         return None
 
     def _format_prediction_context(self, tool_data: Dict) -> str:
+        context = ""
         if "technical" in tool_data:
             t = tool_data["technical"]
-            return f"Asset: {t.get('ticker')}\nPrice: ${t.get('current_price'):.2f}\nBias: {t.get('bias')}\nConfidence: {t.get('confidence')}%\n\nAnalyze this for the user."
+            context += f"TECHNICAL DATA for {t.get('ticker')}:\nPrice: ${t.get('current_price'):.2f}\nBias: {t.get('bias')}\nConfidence: {t.get('confidence')}%\nIndicators: {t.get('signals', [])}\n\n"
+        
+        if "tokenomics" in tool_data:
+            td = tool_data["tokenomics"]
+            context += f"TOKENOMICS DATA:\n{json.dumps(td, indent=2)}\n\n"
+            
+        if context:
+            return context + "Analyze this data for the user and give them a simplified, empathetic breakdown."
         return ""

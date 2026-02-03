@@ -32,6 +32,7 @@ from services.tokenomics_service import TokenomicsService
 from services.news_service import NewsService
 from services.websocket_service import BinanceWebSocketService
 from services.pattern_recognition_service import pattern_service
+from services.market_service import MarketService
 
 # Initialize WebSocket service
 websocket_service = None
@@ -140,6 +141,12 @@ try:
 except Exception as e:
     print(f"Failed to initialize NewsService: {e}")
     news_service = None
+
+try:
+    market_service = MarketService()
+except Exception as e:
+    print(f"Failed to initialize MarketService: {e}")
+    market_service = None
 
 # Request/Response Models
 class SignupRequest(BaseModel):
@@ -425,7 +432,7 @@ async def get_price_history(ticker: str, timeframe: str = "24H"):
         
         config = timeframe_map.get(timeframe, timeframe_map["24H"])
         
-        df = technical_service.analyzer.fetch_binance_ohlcv_with_fallback(
+        df = technical_service.analyzer.fetch_binance_ohlcv(
             symbol=ticker, 
             interval=config["interval"], 
             limit=config["limit"]
@@ -605,7 +612,7 @@ async def feed_nunno(request: FeedNunnoRequest, current_user: User = Depends(get
 
             # Phase 3: Market Density & Stats
             yield f"data: {json.dumps({'type': 'status', 'message': 'Calculating Market Density...'})}\n\n"
-            df_24h = technical_service.analyzer.fetch_binance_ohlcv_with_fallback(
+            df_24h = technical_service.analyzer.fetch_binance_ohlcv(
                 symbol=request.symbol, interval="15m", limit=96
             )
             
@@ -769,6 +776,11 @@ async def list_patterns():
         "patterns": patterns,
         "total": len(patterns)
     }
+
+@app.get("/api/v1/market/highlights")
+async def get_market_highlights():
+    """Get market-wide highlights (gainers, losers, new listings)"""
+    return market_service.get_market_highlights()
 
 if __name__ == "__main__":
     import uvicorn

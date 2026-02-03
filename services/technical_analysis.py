@@ -49,7 +49,7 @@ class TechnicalAnalysisService:
         try:
             # Fetch and analyze data
             # Fetch and analyze data using the robust fallback method
-            df = self.analyzer.fetch_binance_ohlcv_with_fallback(symbol=ticker, interval=interval, limit=500)
+            df = self.analyzer.fetch_binance_ohlcv(symbol=ticker, interval=interval, limit=500)
             df = self.analyzer.add_comprehensive_indicators(df)
             confluences, latest_row = self.analyzer.generate_comprehensive_analysis(df)
             bias, strength = self.analyzer.calculate_confluence_strength(confluences)
