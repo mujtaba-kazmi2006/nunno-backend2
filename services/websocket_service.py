@@ -34,6 +34,8 @@ class BinanceWebSocketService:
         self.kline_subscribers: Dict = {}  # Track kline subscribers
         self.binance_ws = None
         self.running = False
+        self.last_broadcast: Dict[str, float] = {symbol: 0 for symbol in self.symbols}
+        self.broadcast_interval = 1.0  # Minimum seconds between broadcasts per symbol
         
         # Initialize price data structure
         for symbol in self.symbols:
@@ -224,15 +226,22 @@ class BinanceWebSocketService:
             logger.error(f"Error processing Binance message: {e}")
     
     async def _broadcast_update(self, symbol: str):
-        """Broadcast price update to all connected clients"""
+        """Broadcast price update to all connected clients with throttling"""
         if not self.connected_clients:
             return
+
+        # Throttle broadcasts to reduce CPU/Network load
+        now = datetime.now().timestamp()
+        if now - self.last_broadcast.get(symbol, 0) < self.broadcast_interval:
+            return
+            
+        self.last_broadcast[symbol] = now
         
         update_message = {
             'type': 'price_update',
             'symbol': symbol,
-            'data': self.price_data[symbol],
-            'history': list(self.price_history[symbol])[-20:]  # Last 20 points for mini chart
+            'data': self.price_data[symbol]
+            # Removed history here to reduce payload - history is only sent on initial connection
         }
         
         message_json = json.dumps(update_message)

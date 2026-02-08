@@ -16,10 +16,13 @@ class NewsService:
         try:
             self.news_api_key = os.getenv("NEWS_API_KEY", "")
             self.fear_greed_url = "https://api.alternative.me/fng/"
+            from services.cache_service import cache_service
+            self.cache = cache_service
         except Exception as e:
             print(f"Error initializing NewsService: {e}")
             self.news_api_key = ""
             self.fear_greed_url = "https://api.alternative.me/fng/"
+            self.cache = None
     
     def get_news_sentiment(self, ticker: str):
         """
@@ -31,6 +34,14 @@ class NewsService:
         Returns:
             News and sentiment data with beginner explanations
         """
+        # Check cache
+        cache_key = f"news_sentiment_{ticker.upper()}"
+        if self.cache:
+            cached = self.cache.get(cache_key)
+            if cached:
+                print(f"✅ Cache HIT for {ticker} news")
+                return cached
+
         try:
             # Get Fear & Greed Index
             fear_greed = self._get_fear_greed_index()
@@ -55,6 +66,10 @@ class NewsService:
                 }
             }
             
+            # Cache for 10 minutes (news doesn't change THAT fast)
+            if self.cache:
+                self.cache.set(cache_key, response, ttl_seconds=600)
+
             return response
             
         except Exception as e:

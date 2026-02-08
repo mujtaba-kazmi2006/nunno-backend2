@@ -21,10 +21,13 @@ class TokenomicsService:
             from tokenomics_utils import ComprehensiveTokenomics
             self.tokenomics = ComprehensiveTokenomics()
             self.available = True
+            from services.cache_service import cache_service
+            self.cache = cache_service
         except Exception as e:
             print(f"Warning: Could not import tokenomics_utils: {e}. Tokenomics disabled.")
             self.tokenomics = None
             self.available = False
+            self.cache = None
     
     def analyze(self, coin_id: str, investment_amount: float = 1000):
         """
@@ -43,6 +46,14 @@ class TokenomicsService:
                 "message": "The tokenomics module is not configured. This feature will be available soon!"
             }
         
+        # Check cache
+        cache_key = f"tokenomics_{coin_id}_{investment_amount}"
+        if self.cache:
+            cached = self.cache.get(cache_key)
+            if cached:
+                print(f"✅ Cache HIT for {coin_id} tokenomics")
+                return cached
+        
         try:
             # Fetch comprehensive data
             print(f"DEBUG: Fetching tokenomics for {coin_id}...")
@@ -56,9 +67,10 @@ class TokenomicsService:
                 }
             print(f"DEBUG: Successfully fetched tokenomics for {coin_id}")
             
-            # Format for beginner-friendly response
-            # Return the full comprehensive data directly
-            # The AI will handle the formatting and beginner explanations
+            # Cache for 1 hour as tokenomics are stable
+            if self.cache:
+                self.cache.set(cache_key, data, ttl_seconds=3600)
+
             return data
             
             return response

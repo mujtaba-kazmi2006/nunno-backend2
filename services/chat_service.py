@@ -35,25 +35,37 @@ class ChatService:
         self.technical_service = TechnicalAnalysisService()
         self.tokenomics_service = TokenomicsService()
     
-    def _get_system_prompt(self, user_name: str, user_age: int) -> str:
-        """Enhanced system prompt"""
-        return f"""You are Nunno, a friendly AI financial educator by Mujtaba Kazmi.
+    def _get_system_prompt(self, user_name: str, user_age: int, experience_level: str = "pro") -> str:
+        """Dynamic system prompt that acknowledges the visual Analysis Card"""
+        
+        base_persona = f"""You are Nunno, the premium AI mentor within the Nunno Finance intelligence suite, created by Mujtaba Kazmi.
 
-User: {user_name}, {user_age} years old
+User: {user_name} ({user_age} years old)
+Experience Level: {experience_level.upper()}
 
-For PREDICTIONS with technical data:
-1. **Price Summary**: Start with current price and direction.
-2. **Technical Scorecard (Table)**: Markdown table with Indicator | Value | Meaning.
-3. **Indicator Deep Dive**: Explain 2-3 key indicators using simple analogies.
-4. **Levels & Strategy**: Support/Resistance levels and their meaning.
-5. **Final Verdict**: Clear, encouraging conclusion.
+IMPORTANT: When technical data is available, a high-end **Visual Analysis Card** (with charts, confidence bars, and price levels) is automatically displayed to the user. 
+Your role is to act as a **human-like companion** to that card. 
 
-Keep it structured, use bold headers, and emojis! 📈💡
+CORE DIRECTIVES:
+1. **Complement the visuals**: Don't repeat every number from the card. Instead, interpret 'The Why'. If the card shows $40k support, say why that level matters today.
+2. **Dynamic Formatting**: Use clean spacing, bold highlights, and bullet points. Avoid robotic tables or repetitive "Scorecards".
+3. **Contextual Intelligence**: match the market mood. If it's a "Bullish Breakout", be energetic. If it's a "Sideways Squeeze", be cautious and patient.
+4. **No Robot-Talk**: Avoid "Based on the data..." or "Here is your analysis." Use conversational hooks like "Alright {user_name}, looking at these levels..." or "The charts are showing a classic setup here..."
 
-For OTHER questions:
-- Explain concepts simply with real examples
-- Be concise (2-3 paragraphs)
-- Never give financial advice - educate only!"""
+EXPERIENCE-BASED TAILORING:
+- **BEGINNER**: Be an encouraging coach. Use analogies (e.g., "The market is finding a floor like a trampoline"). Hide the raw math; focus on the 'Concept'.
+- **PRO**: Be a peer. Talk about liquidity sweeps, EMA fan-outs, and regime shifts. Focus on 'Strategy' and 'Risk'.
+
+FORMATTING:
+- Start with a punchy "Market Vibe" sentence.
+- Provide a brief, conversational analysis of the visual card's data.
+- End with a single, clear 'Thing to Watch Output'."""
+
+        return base_persona.strip()
+
+
+        return base_persona.strip()
+
 
     async def _get_history_from_db(self, conversation_id: str, db: Session, limit: int = 10) -> List[Dict]:
         """Fetch last N messages for a conversation"""
@@ -112,7 +124,7 @@ For OTHER questions:
                     tool_data["technical"] = self.technical_service.analyze(params["ticker"], params.get("interval", "15m"))
         
         # Build Messages
-        messages = [{"role": "system", "content": self._get_system_prompt(user.name, user_age)}]
+        messages = [{"role": "system", "content": self._get_system_prompt(user.name, user_age, user.experience_level)}]
         messages.extend(history)
         messages.append({"role": "user", "content": message})
         
@@ -190,7 +202,8 @@ For OTHER questions:
                         tool_data["tokenomics"] = result
                         yield f"data: {json.dumps({'type': 'data', 'tool_calls': ['tokenomics_analysis'], 'data_used': tool_data})}\n\n"
 
-        messages = [{"role": "system", "content": self._get_system_prompt(user.name, user_age)}]
+        experience_level = getattr(user, 'experience_level', 'pro')
+        messages = [{"role": "system", "content": self._get_system_prompt(user.name, user_age, experience_level)}]
         messages.extend(history)
         messages.append({"role": "user", "content": message})
         if tool_data:
@@ -225,17 +238,19 @@ For OTHER questions:
             yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
 
     async def _detect_prediction_request(self, message: str) -> List[tuple]:
-        """Detect prediction or tokenomics requests"""
+        """Detect prediction, tokenomics, or candlestick requests"""
         message_lower = message.lower()
         prediction_keywords = ["predict", "prediction", "forecast", "will it go up", "price target", "technical analysis", "price chat", "analyze chart"]
         tokenomics_keywords = ["tokenomics", "supply", "total supply", "circulating supply", "allocation", "distribution", "utility", "burn"]
+        candlestick_keywords = ["candlestick", "candle pattern", "pinbar", "hammer", "doji", "morning star", "evening star", "engulfing", "shooting star"]
         
         results = []
         ticker = self._extract_ticker(message_lower)
         if not ticker:
             return []
 
-        if any(keyword in message_lower for keyword in prediction_keywords):
+        # Technical Analysis (includes candlesticks now)
+        if any(keyword in message_lower for keyword in prediction_keywords + candlestick_keywords):
             interval = self._extract_interval(message_lower)
             results.append(("technical_analysis", {"ticker": ticker, "interval": interval}))
             
@@ -295,15 +310,36 @@ For OTHER questions:
         return None
 
     def _format_prediction_context(self, tool_data: Dict) -> str:
-        context = ""
+        """Provides clean, structured data context to the LLM without redundant instructions"""
+        context_parts = []
+        
         if "technical" in tool_data:
             t = tool_data["technical"]
-            context += f"TECHNICAL DATA for {t.get('ticker')}:\nPrice: ${t.get('current_price'):.2f}\nBias: {t.get('bias')}\nConfidence: {t.get('confidence')}%\nIndicators: {t.get('signals', [])}\n\n"
+            tech_info = [
+                f"TICKER: {t.get('ticker')}",
+                f"PRICE: ${t.get('current_price'):.2f}",
+                f"BIAS: {t.get('bias')}",
+                f"CONFIDENCE: {t.get('confidence')}%",
+                f"SIGNALS: {', '.join(t.get('signals', []))}"
+            ]
+            
+            # Key technical levels
+            levels = t.get('key_levels', {})
+            if levels:
+                tech_info.append(f"LEVELS: Support ${levels.get('support'):.2f}, Resistance ${levels.get('resistance'):.2f}")
+            
+            # Candlestick Pattern Summary
+            markers = t.get('candlestick_markers', [])
+            if markers:
+                patterns = [m.get('text') for m in markers[-3:]] # Get last 3 patterns
+                tech_info.append(f"RECENT PATTERNS: {', '.join(patterns)}")
+            
+            context_parts.append("\n".join(tech_info))
         
         if "tokenomics" in tool_data:
             td = tool_data["tokenomics"]
-            context += f"TOKENOMICS DATA:\n{json.dumps(td, indent=2)}\n\n"
+            context_parts.append(f"TOKENOMICS DATA:\n{json.dumps(td, indent=2)}")
             
-        if context:
-            return context + "Analyze this data for the user and give them a simplified, empathetic breakdown."
+        if context_parts:
+            return "--- MARKET DATA SNAPSHOT ---\n" + "\n\n".join(context_parts) + "\n---------------------------"
         return ""

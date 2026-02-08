@@ -5,16 +5,19 @@ Converted from betterpredictormodule.py to FastAPI service
 
 import sys
 import os
+import numpy as np
 # Fix import path to find betterpredictormodule.py in the root folder (Nunno Streamlit)
 # Path structure: Nunno Streamlit/NunnoFinance/backend/services/technical_analysis.py
 # We need to go up 4 levels to reach Nunno Streamlit
 # Import the existing TradingAnalyzer class from the services package
 # This ensures we use the real module, not a mock
 try:
-    from services.betterpredictormodule import TradingAnalyzer, ScenarioGenerator
+    from services.betterpredictormodule import TradingAnalyzer
+    from services.enhanced_scenario_generator import EnhancedScenarioGenerator as ScenarioGenerator
 except ImportError:
     # Fallback for local testing if run directly
-    from .betterpredictormodule import TradingAnalyzer, ScenarioGenerator
+    from .betterpredictormodule import TradingAnalyzer
+    from .enhanced_scenario_generator import EnhancedScenarioGenerator as ScenarioGenerator
 
 class TechnicalAnalysisService:
     """
@@ -63,30 +66,109 @@ class TechnicalAnalysisService:
         except Exception as e:
             raise Exception(f"Simulation failed: {str(e)}")
 
-    def get_monte_carlo(self, ticker: str, interval: str = "15m"):
+    def get_monte_carlo(self, ticker: str, interval: str = "15m", enhanced: bool = True):
         """
-        Generate Monte Carlo probability fan
+        Generate Monte Carlo probability fan with enhanced features
+        
+        Args:
+            ticker: Trading pair (e.g., BTCUSDT)
+            interval: Timeframe (e.g., 15m, 1h, 4h, 1d)
+            enhanced: If True, use comprehensive scenario analysis with risk metrics
         """
         try:
-            df = self.analyzer.fetch_binance_ohlcv(symbol=ticker, interval=interval, limit=100)
+            df = self.analyzer.fetch_binance_ohlcv(symbol=ticker, interval=interval, limit=500)
             df = self.analyzer.add_comprehensive_indicators(df)
             latest_row = df.iloc[-1]
             
             last_price = float(latest_row['Close'])
             atr = float(latest_row['ATR'])
-            market_regime = self.analyzer.classify_market_regime(df, latest_row)['regime']
+            market_regime_data = self.analyzer.classify_market_regime(df, latest_row)
+            market_regime = market_regime_data['regime']
             
-            fan_data = self.simulator.generate_monte_carlo_paths(last_price, atr, market_regime)
-            return {
-                "ticker": ticker,
-                "market_regime": market_regime,
-                "fan": fan_data["fan"],
-                "paths": fan_data["paths"],
-                "meta": fan_data["meta"],
-                "last_price": last_price
-            }
+            if enhanced:
+                # Use comprehensive scenario analysis
+                results = self.simulator.generate_all_scenarios(
+                    df=df,
+                    latest_row={
+                        'Close': last_price,
+                        'ATR': atr,
+                        'S1': float(latest_row['S1']),
+                        'R1': float(latest_row['R1'])
+                    },
+                    market_regime=market_regime,
+                    num_paths=100,
+                    steps=50
+                )
+                
+                # Format paths for frontend (limit to 10 paths per scenario for performance)
+                formatted_scenarios = {}
+                for scenario_name, paths in results['scenarios'].items():
+                    if isinstance(paths, list) and len(paths) > 0:
+                        formatted_scenarios[scenario_name] = paths[:10]
+                
+                return {
+                    "ticker": ticker,
+                    "market_regime": market_regime,
+                    "market_regime_description": market_regime_data.get('description', ''),
+                    "last_price": last_price,
+                    "enhanced": True,
+                    
+                    # Multiple scenarios
+                    "scenarios": formatted_scenarios,
+                    
+                    # Risk metrics for each scenario
+                    "statistics": results['statistics'],
+                    
+                    # Confidence cones for visualization
+                    "confidence_cones": results['confidence_cones'],
+                    
+                    # Metadata
+                    "meta": results['metadata'],
+                    
+                    # Legacy compatibility - use base scenario as default
+                    "fan": self._convert_paths_to_fan(results['scenarios']['base']),
+                    "paths": results['scenarios']['base'][:10]
+                }
+            else:
+                # Legacy mode - basic Monte Carlo
+                fan_data = self.simulator.generate_monte_carlo_paths(last_price, atr, market_regime)
+                return {
+                    "ticker": ticker,
+                    "market_regime": market_regime,
+                    "fan": fan_data["fan"],
+                    "paths": fan_data["paths"],
+                    "meta": fan_data["meta"],
+                    "last_price": last_price,
+                    "enhanced": False
+                }
         except Exception as e:
             raise Exception(f"Monte Carlo generation failed: {str(e)}")
+    
+    def _convert_paths_to_fan(self, paths):
+        """Convert paths to fan format for backward compatibility"""
+        if not paths or len(paths) == 0:
+            return []
+        
+        steps = len(paths[0])
+        steps_data = [[] for _ in range(steps)]
+        
+        for path in paths:
+            for s, point in enumerate(path):
+                steps_data[s].append(point["value"])
+        
+        fan_data = []
+        for s in range(steps):
+            prices = steps_data[s]
+            fan_data.append({
+                "time": s,
+                "p25": float(np.percentile(prices, 25)),
+                "p50": float(np.percentile(prices, 50)),
+                "p75": float(np.percentile(prices, 75)),
+                "min": float(np.min(prices)),
+                "max": float(np.max(prices))
+            })
+        
+        return fan_data
     
     def analyze(self, ticker: str, interval: str = "15m"):
         """
@@ -99,6 +181,12 @@ class TechnicalAnalysisService:
         Returns:
             Dict with analysis results and explanations
         """
+        from services.cache_service import cache_service
+        cache_key = f"analysis_{ticker}_{interval}"
+        cached_result = cache_service.get(cache_key)
+        if cached_result:
+            return cached_result
+
         try:
             # Fetch and analyze data
             # Fetch and analyze data using the robust fallback method
@@ -161,6 +249,11 @@ class TechnicalAnalysisService:
                     'ema21': float(row['EMA_21'])
                 })
             
+            # Detect Candlestick Patterns
+            from services.candlestick_service import CandlestickService
+            candlestick_service = CandlestickService()
+            candlestick_markers = candlestick_service.detect_patterns(df)
+
             # Build response with MORE indicators
             response = {
                 "ticker": ticker,
@@ -174,6 +267,7 @@ class TechnicalAnalysisService:
                 "market_regime": market_regime,
                 "trend_strength": trend_strength,
                 "price_history": price_history,  # ADDED BACK - Chart data
+                "candlestick_markers": candlestick_markers, # NEW: Candlestick patterns
                 "indicators": {
                     "rsi_14": round(float(latest_row['RSI_14']), 1),
                     "macd": round(float(latest_row['MACD']), 2),
@@ -204,6 +298,8 @@ class TechnicalAnalysisService:
                 }
             }
             
+            # Cache for 60 seconds (market data changes fast but analysis is heavy)
+            cache_service.set(cache_key, response, ttl_seconds=60)
             return response
             
         except Exception as e:

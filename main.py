@@ -153,6 +153,7 @@ class SignupRequest(BaseModel):
     email: str
     password: str
     name: str
+    experience_level: Optional[str] = "pro"
 
 class LoginRequest(BaseModel):
     email: str
@@ -195,6 +196,7 @@ async def signup(request: SignupRequest, db = Depends(get_db)):
             password_hash=hash_password(request.password),
             name=request.name,
             tier="free",
+            experience_level=request.experience_level,
             tokens_remaining=10000,
             tokens_used_today=0,
             searches_today=0,
@@ -219,6 +221,7 @@ async def signup(request: SignupRequest, db = Depends(get_db)):
                 "email": user.email,
                 "name": user.name,
                 "tier": user.tier,
+                "experience_level": user.experience_level,
                 "tokens_remaining": user.tokens_remaining,
                 "searches_today": user.searches_today,
                 "tokens_used_today": user.tokens_used_today,
@@ -258,6 +261,7 @@ async def login(request: LoginRequest, db = Depends(get_db)):
                 "email": user.email,
                 "name": user.name,
                 "tier": user.tier,
+                "experience_level": user.experience_level,
                 "tokens_remaining": user.tokens_remaining,
                 "tokens_used_today": user.tokens_used_today,
                 "searches_today": user.searches_today,
@@ -284,6 +288,7 @@ async def get_me(current_user: User = Depends(get_current_user), db = Depends(ge
         "email": current_user.email,
         "name": current_user.name,
         "tier": current_user.tier,
+        "experience_level": current_user.experience_level,
         "tokens_remaining": current_user.tokens_remaining,
         "tokens_used_today": current_user.tokens_used_today,
         "searches_today": current_user.searches_today,
@@ -310,12 +315,19 @@ async def get_technical_analysis(ticker: str, interval: str = "15m", current_use
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/v1/simulate/monte-carlo/{ticker}")
-async def get_monte_carlo_simulation(ticker: str, interval: str = "15m"):
-    """Get Monte Carlo probability fan for a ticker (Elite Chart 2.0)"""
+async def get_monte_carlo_simulation(ticker: str, interval: str = "15m", enhanced: bool = True):
+    """
+    Get Monte Carlo probability fan for a ticker (Elite Chart 2.0)
+    
+    Args:
+        ticker: Trading pair (e.g., BTCUSDT)
+        interval: Timeframe (e.g., 15m, 1h, 4h, 1d)
+        enhanced: If True, returns comprehensive scenarios with risk metrics (default: True)
+    """
     try:
         if not technical_service:
             raise HTTPException(status_code=503, detail="Technical service unavailable")
-        return technical_service.get_monte_carlo(ticker.upper(), interval)
+        return technical_service.get_monte_carlo(ticker.upper(), interval, enhanced)
     except Exception as e:
         print(f"Simulation Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -519,6 +531,43 @@ async def get_price_history(ticker: str, timeframe: str = "24H"):
             "is_mock": True
         }
 
+@app.get("/api/v1/technical/{ticker}")
+async def get_technical_analysis(ticker: str, interval: str = "15m"):
+    """Get comprehensive technical analysis for a ticker"""
+    if not technical_service:
+        raise HTTPException(status_code=503, detail="Technical service unavailable")
+    try:
+        return technical_service.analyze(ticker, interval)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/v1/simulation/scenario/{ticker}")
+async def get_simulation_scenario(ticker: str, injection_type: str, interval: str = "15m"):
+    """Generate a specific injected market scenario"""
+    if not technical_service:
+        raise HTTPException(status_code=503, detail="Technical service unavailable")
+    try:
+        return technical_service.simulate_scenario(ticker, injection_type, interval)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/v1/simulation/monte-carlo/{ticker}")
+async def get_monte_carlo(ticker: str, interval: str = "15m", enhanced: bool = True):
+    """
+    Generate Monte Carlo probability fan with enhanced features
+    
+    Args:
+        ticker: Trading pair (e.g., BTCUSDT)
+        interval: Timeframe (e.g., 15m, 1h, 4h, 1d)
+        enhanced: If True, returns comprehensive scenarios with risk metrics (default: True)
+    """
+    if not technical_service:
+        raise HTTPException(status_code=503, detail="Technical service unavailable")
+    try:
+        return technical_service.get_monte_carlo(ticker, interval, enhanced)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/v1/conversations")
 async def get_conversations(current_user: User = Depends(get_current_user), db = Depends(get_db)):
     """List user chats"""
@@ -595,49 +644,49 @@ async def feed_nunno(request: FeedNunnoRequest, current_user: User = Depends(get
     
     try:
         async def generate_feed_report():
-            # Phase 1: Macro & News Aggregation
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Gathering Global Macro News...'})}\n\n"
-            await asyncio.sleep(0.1)
+            # Parallel aggregation of all required data to save 5-10 seconds
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Initializing Neural Aggregators...'})}\n\n"
             
-            news_data = news_service.get_news_sentiment(request.symbol)
-            
-            macro_headlines = []
-            try:
-                from duckduckgo_search import DDGS
-                with DDGS() as ddgs:
-                    # Focus on Fed and US Economy impacting crypto
-                    queries = ["FED interest rate crypto impact", "US economy crypto regulation news"]
-                    for query in queries:
-                        results = list(ddgs.text(query, max_results=3, timelimit='d'))
-                        for r in results:
-                            macro_headlines.append({
-                                "title": r.get("title", ""),
-                                "source": "Macro Insight",
-                                "url": r.get("href", "")
-                            })
-            except Exception as e:
-                print(f"Macro news fetch fail: {e}")
-
-            # Phase 2: Multi-Timeframe Technical Analysis
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Aggregating Multi-Timeframe Data...'})}\n\n"
-            timeframes = ["15m", "1h", "4h", "1d"]
-            multi_tf_data = {}
-            
-            for tf in timeframes:
-                yield f"data: {json.dumps({'type': 'status', 'message': f'Analyzing {tf} data...'})}\n\n"
+            # Define helper for macro news to keep it in a thread
+            def get_macro_news():
+                headlines = []
                 try:
-                    analysis = technical_service.analyze(request.symbol, tf)
-                    multi_tf_data[tf] = analysis
+                    from duckduckgo_search import DDGS
+                    with DDGS() as ddgs:
+                        queries = ["FED interest rate crypto impact", "US economy crypto regulation news"]
+                        for query in queries:
+                            results = list(ddgs.text(query, max_results=3, timelimit='d'))
+                            for r in results:
+                                headlines.append({
+                                    "title": r.get("title", ""),
+                                    "source": "Macro Insight",
+                                    "url": r.get("href", "")
+                                })
                 except Exception as e:
-                    print(f"Error analyzing {tf}: {e}")
-                    multi_tf_data[tf] = None
+                    print(f"Macro news fetch fail: {e}")
+                return headlines
 
-            # Phase 3: Market Density & Stats
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Calculating Market Density...'})}\n\n"
-            df_24h = technical_service.analyzer.fetch_binance_ohlcv(
-                symbol=request.symbol, interval="15m", limit=96
-            )
+            # Start all heavy I/O tasks in parallel
+            timeframes = ["15m", "1h", "4h", "1d"]
+            tasks = [
+                asyncio.to_thread(news_service.get_news_sentiment, request.symbol),
+                asyncio.to_thread(get_macro_news),
+                asyncio.to_thread(technical_service.analyzer.fetch_binance_ohlcv, symbol=request.symbol, interval="15m", limit=96)
+            ]
+            # Add technical analysis tasks for each timeframe
+            for tf in timeframes:
+                tasks.append(asyncio.to_thread(technical_service.analyze, request.symbol, tf))
+
+            # Wait for all data (this happens much faster now)
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Synchronizing Global Data Nodes...'})}\n\n"
+            results = await asyncio.gather(*tasks)
             
+            news_data = results[0]
+            macro_headlines = results[1]
+            df_24h = results[2]
+            multi_tf_data = {tf: results[i+3] for i, tf in enumerate(timeframes)}
+
+            # Phase 3: Market Density & Stats calculation
             curr_price = 0
             stats_24h = {"high": 0, "low": 0, "var": 0, "std": 0}
             if not df_24h.empty:
@@ -702,9 +751,10 @@ Be extremely detailed. Use bold headers. Stream the report now:"""
             yield f"data: {json.dumps({'type': 'status', 'message': 'Generating Final Intelligence Briefing...'})}\n\n"
             async for chunk in chat_service.stream_message(
                 message=prompt,
-                user_name=request.user_name,
-                user_age=18,
-                conversation_history=[]
+                user=current_user,
+                conversation_id=f"feed_{request.symbol}_{current_user.id}",
+                db=db,
+                user_age=18
             ):
                 yield chunk
             

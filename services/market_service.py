@@ -18,26 +18,40 @@ class MarketService:
         self.binance_base = "https://api.binance.com/api/v3"
         self.binance_us_base = "https://api.binance.us/api/v3"
         self.mexc_base = "https://api.mexc.com/api/v3"
+        try:
+            from services.cache_service import cache_service
+            self.cache = cache_service
+        except:
+            self.cache = None
 
     def get_market_highlights(self) -> Dict[str, Any]:
         """
         Get comprehensive market highlights with multiple API fallbacks
         """
+        # Check cache (1 minute TTL is enough for market highlights to feel fresh)
+        if self.cache:
+            cached = self.cache.get("market_highlights")
+            if cached:
+                return cached
+
         # Try Primary Binance
         highlights = self._fetch_from_binance(self.binance_base)
         if highlights['gainers']:
+            if self.cache: self.cache.set("market_highlights", highlights, ttl_seconds=60)
             return highlights
 
         # Try Binance US fallback
         logger.info("Main Binance API failed or returned empty. Trying Binance US...")
         highlights = self._fetch_from_binance(self.binance_us_base)
         if highlights['gainers']:
+            if self.cache: self.cache.set("market_highlights", highlights, ttl_seconds=60)
             return highlights
 
         # Try MEXC fallback
         logger.info("Binance US API failed. Trying MEXC...")
         highlights = self._fetch_from_mexc()
         if highlights['gainers']:
+            if self.cache: self.cache.set("market_highlights", highlights, ttl_seconds=60)
             return highlights
 
         return self._get_empty_highlights()

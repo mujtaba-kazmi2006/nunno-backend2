@@ -64,6 +64,7 @@ class User(Base):
     password_hash = Column(String)
     name = Column(String)
     tier = Column(String, default="free") # free, pro, whale
+    experience_level = Column(String, default="pro") # beginner, pro
     
     # Usage Tracking
     tokens_remaining = Column(Integer, default=10000) # Total tokens allowed in current cycle
