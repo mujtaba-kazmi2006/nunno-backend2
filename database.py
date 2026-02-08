@@ -37,15 +37,15 @@ try:
     engine = create_engine(DATABASE_URL, **engine_args)
     # Test connection immediately
     with engine.connect() as conn:
-        print("✅ Database connection verified successfully!")
+        print("[OK] Database connection verified successfully!")
 except Exception as e:
-    print(f"❌ DATABASE CONNECTION ERROR: {str(e)}")
-    print("⚠️  Warning: Could not connect to the specified DATABASE_URL.")
+    print(f"[ERROR] DATABASE CONNECTION ERROR: {str(e)}")
+    print("[WARNING] Could not connect to the specified DATABASE_URL.")
     
     # If connection fails and it's not already SQLite, try falling back to SQLite
     # This ensures the app can at least start on platforms like Hugging Face
     if not DATABASE_URL.startswith("sqlite"):
-        print("🔄 Falling back to local SQLite (nunno.db) to allow app startup...")
+        print("[FALLBACK] Falling back to local SQLite (nunno.db) to allow app startup...")
         DATABASE_URL = "sqlite:///./nunno.db"
         engine_args = {"connect_args": {"check_same_thread": False}}
         engine = create_engine(DATABASE_URL, **engine_args)

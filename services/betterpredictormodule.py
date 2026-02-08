@@ -22,14 +22,14 @@ try:
     TOKENOMICS_AVAILABLE = True
 except ImportError:
     TOKENOMICS_AVAILABLE = False
-    print("⚠️ Tokenomics module not found. Some features will be disabled.")
+    print("[WARNING] Tokenomics module not found. Some features will be disabled.")
 
 try:
     from social_scraper_module import CryptoSocialScraper
     SOCIAL_AVAILABLE = True
 except ImportError:
     SOCIAL_AVAILABLE = False
-    print("⚠️ Social scraper module not found. Some features will be disabled.")
+    print("[WARNING] Social scraper module not found. Some features will be disabled.")
 
 
 class TradingAnalyzer:

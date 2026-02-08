@@ -5,27 +5,30 @@ try:
 except ImportError:
     from ..database import User
 
-# Production-grade tier configuration
+# Production-grade tier configuration with fallback chains
 TIER_CONFIGS = {
     "free": {
         "daily_searches": 10,
         "daily_token_limit": 15000, # Approx 20-30 chat turns
-        "model": "meta-llama/llama-3.1-8b-instruct", # Low-cost paid model, no rate limits
-        "fallback_model": "meta-llama/llama-3.2-3b-instruct:free",
+        "model": "nvidia/nemotron-3-nano-30b-a3b:free", # Primary: Free Nemotron
+        "fallback_model": "meta-llama/llama-3.1-8b-instruct", # Fallback 1: Cheap paid
+        "fallback_model_2": "meta-llama/llama-3.2-3b-instruct:free", # Fallback 2: Free backup
         "precision": "low"
     },
     "pro": {
         "daily_searches": 100,
         "daily_token_limit": 100000,
-        "model": "meta-llama/llama-3.1-70b-instruct", # Better quality for pro users
-        "fallback_model": "meta-llama/llama-3.1-8b-instruct",
+        "model": "meta-llama/llama-3.1-70b-instruct", # Primary: High quality
+        "fallback_model": "meta-llama/llama-3.1-8b-instruct", # Fallback 1: Fast & cheap
+        "fallback_model_2": "nvidia/nemotron-3-nano-30b-a3b:free", # Fallback 2: Free
         "precision": "high"
     },
     "whale": {
         "daily_searches": 1000,
         "daily_token_limit": 1000000,
-        "model": "openai/gpt-4o", # Premium model
-        "fallback_model": "meta-llama/llama-3.1-405b-instruct",
+        "model": "openai/gpt-4o", # Primary: Premium
+        "fallback_model": "meta-llama/llama-3.1-405b-instruct", # Fallback 1: Top open-source
+        "fallback_model_2": "meta-llama/llama-3.1-70b-instruct", # Fallback 2: Still great
         "precision": "extreme"
     }
 }

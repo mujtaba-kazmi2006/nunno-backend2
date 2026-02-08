@@ -200,6 +200,7 @@ Remember: You are a human-like expert. You perform the work; you don't just reac
                 tool_context = "### DEEP DIVE REQUEST: Breakdown indicators in detail.\n" + tool_context
             messages.append({"role": "user", "content": tool_context})
 
+        full_content = "" # Initialize full_content for use after try/except blocks
         try:
             stream = await self.client.chat.completions.create(
                 model=model,
@@ -210,23 +211,72 @@ Remember: You are a human-like expert. You perform the work; you don't just reac
                 extra_headers={"HTTP-Referer": "https://nunno.finance", "X-Title": "Nunno Finance"}
             )
             
-            full_content = ""
             async for chunk in stream:
                 content = chunk.choices[0].delta.content
                 if content:
                     full_content += content
                     yield f"data: {json.dumps({'type': 'text', 'content': content})}\n\n"
-            
-            # Save final response & log (roughly estimate tokens if response.usage not in stream)
-            tokens_est = len(full_content) // 4 + len(message) // 4
-            await self._save_message_to_db(conversation_id, "user", message, 0, db, user.id)
-            await self._save_message_to_db(conversation_id, "assistant", full_content, tokens_est, db, user.id)
-            log_token_usage(user.id, tokens_est, db)
-            
-            yield f"data: {json.dumps({'type': 'done'})}\n\n"
-                                
+                    
         except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
+            # FALLBACK LOGIC - Try up to 2 fallback models
+            fallback_model = config.get("fallback_model")
+            fallback_model_2 = config.get("fallback_model_2")
+            
+            if fallback_model and fallback_model != model:
+                yield f"data: {json.dumps({'type': 'status', 'content': 'Primary model busy, switching to backup...'})}\n\n"
+                try:
+                    stream = await self.client.chat.completions.create(
+                        model=fallback_model,
+                        messages=messages,
+                        max_tokens=2000,
+                        temperature=0.7,
+                        stream=True,
+                        extra_headers={"HTTP-Referer": "https://nunno.finance", "X-Title": "Nunno Finance"}
+                    )
+                    full_content = ""
+                    async for chunk in stream:
+                        content = chunk.choices[0].delta.content
+                        if content:
+                            full_content += content
+                            yield f"data: {json.dumps({'type': 'text', 'content': content})}\n\n"
+                            
+                except Exception as fallback_error:
+                    # Try second fallback if available
+                    if fallback_model_2 and fallback_model_2 != fallback_model:
+                        yield f"data: {json.dumps({'type': 'status', 'content': 'Trying final backup model...'})}\n\n"
+                        try:
+                            stream = await self.client.chat.completions.create(
+                                model=fallback_model_2,
+                                messages=messages,
+                                max_tokens=2000,
+                                temperature=0.7,
+                                stream=True,
+                                extra_headers={"HTTP-Referer": "https://nunno.finance", "X-Title": "Nunno Finance"}
+                            )
+                            full_content = ""
+                            async for chunk in stream:
+                                content = chunk.choices[0].delta.content
+                                if content:
+                                    full_content += content
+                                    yield f"data: {json.dumps({'type': 'text', 'content': content})}\n\n"
+                        except Exception as final_error:
+                            yield f"data: {json.dumps({'type': 'error', 'content': 'All AI models are currently busy. Please try again in a few moments.'})}\n\n"
+                            return
+                    else:
+                        yield f"data: {json.dumps({'type': 'error', 'content': f'AI services temporarily unavailable: {str(fallback_error)}'})}\n\n"
+                        return
+            else:
+                yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
+                return
+
+        # Save final response & log (roughly estimate tokens if response.usage not in stream)
+        tokens_est = len(full_content) // 4 + len(message) // 4
+        await self._save_message_to_db(conversation_id, "user", message, 0, db, user.id)
+        await self._save_message_to_db(conversation_id, "assistant", full_content, tokens_est, db, user.id)
+        log_token_usage(user.id, tokens_est, db)
+        
+        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                                
 
     async def _detect_prediction_request(self, message: str, history: List[Dict] = None) -> List[tuple]:
         """Detect prediction, tokenomics, or analysis requests with strict intent filtering"""
