@@ -228,41 +228,57 @@ Remember: You are a person first, an analyst only when asked."""
             yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
 
     async def _detect_prediction_request(self, message: str, history: List[Dict] = None) -> List[tuple]:
-        """Detect prediction, tokenomics, or analysis requests with conversational memory"""
+        """Detect prediction, tokenomics, or analysis requests with strict intent filtering"""
         message_lower = message.lower()
         
-        # 1. Expanded keywords for deep dives and explanations
-        prediction_keywords = [
+        # 1. Broad keywords - only trigger if a ticker is EXPLICITLY mentioned in the SAME message
+        broad_keywords = [
             "predict", "prediction", "forecast", "will it go up", "price target", 
-            "technical analysis", "analyze", "explain", "detail", "elaborate", 
-            "deep dive", "how", "why", "indicators", "chart"
+            "technical analysis", "analyze", "indicators", "chart", "candlestick", 
+            "pinbar", "hammer", "doji", "engulfing"
         ]
-        tokenomics_keywords = ["tokenomics", "supply", "total supply", "circulating supply", "allocation", "burn"]
-        candlestick_keywords = ["candlestick", "candle pattern", "pinbar", "hammer", "doji", "engulfing"]
+        
+        # 2. Strict keywords - trigger even if ticker is from history (deep dive intent)
+        strict_keywords = [
+            "explain in detail", "deep dive", "elaborate", "technical breakdown",
+            "detailed analysis", "give me more info", "more technicals"
+        ]
         
         results = []
         
-        # 2. Extract ticker from message
+        # 3. Check for ticker in current message
         ticker = self._extract_ticker(message_lower)
+        is_from_history = False
         
-        # 3. Conversational Memory: If no ticker in message, look at history
+        # 4. If no ticker in current message, look at history
         if not ticker and history:
-            # Search last 3 messages for a ticker mention
             for hist_msg in reversed(history[-3:]):
                 ticker = self._extract_ticker(hist_msg["content"].lower())
                 if ticker:
+                    is_from_history = True
                     break
         
         if not ticker:
             return []
 
-        # Technical Analysis Trigger
-        if any(keyword in message_lower for keyword in prediction_keywords + candlestick_keywords):
+        # 5. Intent Validation
+        should_trigger = False
+        
+        # If ticker is mentioned in current message, any broad keyword works
+        if not is_from_history and any(k in message_lower for k in broad_keywords + strict_keywords):
+            should_trigger = True
+        # If ticker is from history, ONLY trigger on high-intent strict keywords
+        elif is_from_history and any(k in message_lower for k in strict_keywords):
+            should_trigger = True
+            
+        if should_trigger:
             interval = self._extract_interval(message_lower)
             results.append(("technical_analysis", {"ticker": ticker, "interval": interval}))
             
-        if any(keyword in message_lower for keyword in tokenomics_keywords):
-            results.append(("tokenomics", {"ticker": ticker}))
+            # Tokenomics check
+            tokenomics_keywords = ["tokenomics", "supply", "allocation", "burn"]
+            if any(k in message_lower for k in tokenomics_keywords):
+                results.append(("tokenomics", {"ticker": ticker}))
             
         return results
 
