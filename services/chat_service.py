@@ -47,19 +47,19 @@ IMPORTANT: When technical data is available, a high-end **Visual Analysis Card**
 Your role is to act as a **human-like companion** to that card. 
 
 CORE DIRECTIVES:
-1. **Complement the visuals**: Don't repeat every number from the card. Instead, interpret 'The Why'. If the card shows $40k support, say why that level matters today.
-2. **Dynamic Formatting**: Use clean spacing, bold highlights, and bullet points. Avoid robotic tables or repetitive "Scorecards".
-3. **Contextual Intelligence**: match the market mood. If it's a "Bullish Breakout", be energetic. If it's a "Sideways Squeeze", be cautious and patient.
-4. **No Robot-Talk**: Avoid "Based on the data..." or "Here is your analysis." Use conversational hooks like "Alright {user_name}, looking at these levels..." or "The charts are showing a classic setup here..."
+1. **Natural Dialogue**: If the user is just chatting, answer normally. Do NOT force a financial analysis format for simple greetings or non-financial questions.
+2. **Complement visuals**: If a technical card is present, interpret its meaning. Don't repeat raw numbers.
+3. **No Robot-Talk**: Avoid "Based on my analysis..." or "Analyzing...". Be conversational: "Actually {user_name}, this pattern is interesting..."
+4. **Professional & Premium**: Maintain a high-end, mentor-like tone that matches the Nunno Finance brand.
 
 EXPERIENCE-BASED TAILORING:
 - **BEGINNER**: Be an encouraging coach. Use analogies (e.g., "The market is finding a floor like a trampoline"). Hide the raw math; focus on the 'Concept'.
 - **PRO**: Be a peer. Talk about liquidity sweeps, EMA fan-outs, and regime shifts. Focus on 'Strategy' and 'Risk'.
 
-FORMATTING:
-- Start with a punchy "Market Vibe" sentence.
-- Provide a brief, conversational analysis of the visual card's data.
-- End with a single, clear 'Thing to Watch Output'."""
+
+DYNAMICS:
+- If market data is provided in the context, help the user understand its significance.
+- If NO market data is provided, have a high-value normal conversation about whatever the user asked."""
 
         return base_persona.strip()
 
@@ -266,47 +266,53 @@ FORMATTING:
                 return interval
         return "15m"
 
-    def _extract_ticker(self, message_lower: str) -> Optional[str]:
+    def _extract_ticker(self, message: str) -> Optional[str]:
+        """Robusters ticker extraction: looks for $TICKER, uppercase, or common patterns"""
         import re
-        
-        # 1. Look for $TICKER or "TICKER" or "TICKERUSDT"
-        # Matches 2-10 uppercase letters optionally preceded by $
-        # We also check lowercase since message_lower is used
-        matches = re.findall(r'\$?([a-z]{2,10})', message_lower)
-        
-        # Common coins mapping for aliases
+
+        # 1. Look for explicitly tagged tickers e.g. $BTC or $ETH
+        tagged = re.findall(r'\$([A-Za-z]{2,10})', message)
+        if tagged:
+            return f"{tagged[0].upper()}USDT"
+
+        # 2. Common coins mapping for aliases
         aliases = {
-            "bitcoin": "BTCUSDT", 
-            "ethereum": "ETHUSDT", 
-            "solana": "SOLUSDT",
-            "cardano": "ADAUSDT",
-            "ripple": "XRPUSDT",
-            "dogecoin": "DOGEUSDT",
-            "polkadot": "DOTUSDT"
+            "bitcoin": "BTCUSDT", "ethereum": "ETHUSDT", "solana": "SOLUSDT",
+            "cardano": "ADAUSDT", "ripple": "XRPUSDT", "dogecoin": "DOGEUSDT",
+            "polkadot": "DOTUSDT", "binance": "BNBUSDT", "chainlink": "LINKUSDT",
+            "shiba": "SHIBUSDT"
         }
-        
-        # Check aliases first
         for name, ticker in aliases.items():
-            if name in message_lower:
+            if name in message.lower():
                 return ticker
-                
-        # Known exclusions (words that look like tickers but aren't)
-        exclusions = {"the", "and", "for", "with", "this", "that", "from", "price", "predict", "analysis"}
-        
-        if matches:
-            for match in matches:
-                if match in exclusions:
+
+        # 3. Use uppercase detection (usually tickers are typed in caps)
+        # Matches 2-6 uppercase letters
+        caps = re.findall(r'\b([A-Z]{2,6})\b', message)
+        if caps:
+            for c in caps:
+                if c not in ["USDT", "USD", "AI", "TA", "EMA", "RSI", "MACD"]:
+                    return f"{c}USDT"
+
+        # 4. Fallback search with heavy filtering
+        words = re.findall(r'\b([A-Za-z]{2,10})\b', message)
+        exclusions = {
+            "the", "and", "for", "with", "this", "that", "from", "price", "predict", "analysis",
+            "will", "it", "go", "up", "down", "is", "about", "how", "what", "where", "when",
+            "tell", "me", "show", "give", "build", "make", "think", "looking", "charts", "chart",
+            "market", "news", "bias", "vibe", "mood", "token", "coins", "coin", "crypto",
+            "hello", "hi", "hey", "nunno", "please", "thanks", "thank", "you", "are", "well"
+        }
+
+        if words:
+            for word in words:
+                w_lower = word.lower()
+                if w_lower in exclusions or len(word) < 2:
                     continue
-                
-                ticker = match.upper()
-                
-                # If it already ends with USDT or USD, return it
-                if ticker.endswith("USDT") or ticker.endswith("USD"):
-                    return ticker
-                
-                # Default to USDT suffix as it's most common on Binance
-                return f"{ticker}USDT"
-                
+                # If it's a known or likely ticker (often 3-5 chars)
+                if len(word) <= 5:
+                    return f"{word.upper()}USDT"
+
         return None
 
     def _format_prediction_context(self, tool_data: Dict) -> str:
