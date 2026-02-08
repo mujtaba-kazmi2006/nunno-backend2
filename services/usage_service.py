@@ -10,15 +10,15 @@ TIER_CONFIGS = {
     "free": {
         "daily_searches": 10,
         "daily_token_limit": 15000, # Approx 20-30 chat turns
-        "model": "nvidia/nemotron-3-nano-30b-a3b:free", # Requested free model
+        "model": "meta-llama/llama-3.1-8b-instruct", # Low-cost paid model, no rate limits
         "fallback_model": "meta-llama/llama-3.2-3b-instruct:free",
         "precision": "low"
     },
     "pro": {
         "daily_searches": 100,
         "daily_token_limit": 100000,
-        "model": "meta-llama/llama-3.1-405b-instruct", # High-tier model
-        "fallback_model": "nvidia/nemotron-3-nano-30b-a3b:free",
+        "model": "meta-llama/llama-3.1-70b-instruct", # Better quality for pro users
+        "fallback_model": "meta-llama/llama-3.1-8b-instruct",
         "precision": "high"
     },
     "whale": {

@@ -242,7 +242,7 @@ Remember: You are a human-like expert. You perform the work; you don't just reac
         # 2. Strict keywords - trigger even if ticker is from history (deep dive intent)
         strict_keywords = [
             "explain in detail", "deep dive", "elaborate", "technical breakdown",
-            "detailed analysis", "give me more info", "more technicals"
+            "detailed analysis", "give me more info", "more technicals", "deep lab breakdown"
         ]
         
         results = []
