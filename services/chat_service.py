@@ -99,8 +99,8 @@ Remember: You are a person first, an analyst only when asked."""
         # 2. Fetch History
         history = await self._get_history_from_db(conversation_id, db)
         
-        # Detect Prediction Request
-        tools_to_call = await self._detect_prediction_request(message)
+        # Detect Prediction Request (Pass history for conversational memory)
+        tools_to_call = await self._detect_prediction_request(message, history)
         tool_data = {}
         if tools_to_call:
             for tool_name, params in tools_to_call:
@@ -114,6 +114,9 @@ Remember: You are a person first, an analyst only when asked."""
         
         if tool_data:
             tool_context = self._format_prediction_context(tool_data)
+            # Tag if it's an explanation request
+            if any(k in message.lower() for k in ["explain", "detail", "why", "elaborate"]):
+                tool_context = "### DEEP DIVE REQUEST: Provide a highly detailed breakdown of these indicators.\n" + tool_context
             messages.append({"role": "user", "content": tool_context})
 
         try:
@@ -162,8 +165,8 @@ Remember: You are a person first, an analyst only when asked."""
         # Fetch history
         history = await self._get_history_from_db(conversation_id, db)
         
-        # Tools
-        tools_to_call = await self._detect_prediction_request(message)
+        # Tools (Pass history for conversational memory)
+        tools_to_call = await self._detect_prediction_request(message, history)
         tool_data = {}
         if tools_to_call:
             yield f"data: {json.dumps({'type': 'status', 'content': '🔍 Analyzing data...'})}\n\n"
@@ -191,7 +194,10 @@ Remember: You are a person first, an analyst only when asked."""
         messages.extend(history)
         messages.append({"role": "user", "content": message})
         if tool_data:
-            messages.append({"role": "user", "content": self._format_prediction_context(tool_data)})
+            tool_context = self._format_prediction_context(tool_data)
+            if any(k in message.lower() for k in ["explain", "detail", "why", "elaborate"]):
+                tool_context = "### DEEP DIVE REQUEST: Breakdown indicators in detail.\n" + tool_context
+            messages.append({"role": "user", "content": tool_context})
 
         try:
             stream = await self.client.chat.completions.create(
@@ -221,19 +227,36 @@ Remember: You are a person first, an analyst only when asked."""
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
 
-    async def _detect_prediction_request(self, message: str) -> List[tuple]:
-        """Detect prediction, tokenomics, or candlestick requests"""
+    async def _detect_prediction_request(self, message: str, history: List[Dict] = None) -> List[tuple]:
+        """Detect prediction, tokenomics, or analysis requests with conversational memory"""
         message_lower = message.lower()
-        prediction_keywords = ["predict", "prediction", "forecast", "will it go up", "price target", "technical analysis", "price chat", "analyze chart"]
-        tokenomics_keywords = ["tokenomics", "supply", "total supply", "circulating supply", "allocation", "distribution", "utility", "burn"]
-        candlestick_keywords = ["candlestick", "candle pattern", "pinbar", "hammer", "doji", "morning star", "evening star", "engulfing", "shooting star"]
+        
+        # 1. Expanded keywords for deep dives and explanations
+        prediction_keywords = [
+            "predict", "prediction", "forecast", "will it go up", "price target", 
+            "technical analysis", "analyze", "explain", "detail", "elaborate", 
+            "deep dive", "how", "why", "indicators", "chart"
+        ]
+        tokenomics_keywords = ["tokenomics", "supply", "total supply", "circulating supply", "allocation", "burn"]
+        candlestick_keywords = ["candlestick", "candle pattern", "pinbar", "hammer", "doji", "engulfing"]
         
         results = []
+        
+        # 2. Extract ticker from message
         ticker = self._extract_ticker(message_lower)
+        
+        # 3. Conversational Memory: If no ticker in message, look at history
+        if not ticker and history:
+            # Search last 3 messages for a ticker mention
+            for hist_msg in reversed(history[-3:]):
+                ticker = self._extract_ticker(hist_msg["content"].lower())
+                if ticker:
+                    break
+        
         if not ticker:
             return []
 
-        # Technical Analysis (includes candlesticks now)
+        # Technical Analysis Trigger
         if any(keyword in message_lower for keyword in prediction_keywords + candlestick_keywords):
             interval = self._extract_interval(message_lower)
             results.append(("technical_analysis", {"ticker": ticker, "interval": interval}))
