@@ -11,18 +11,18 @@ if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 # Configuration for different database types
-engine_args = {}
+engine_args = {
+    "pool_size": 20,            # High-concurrency pooling
+    "max_overflow": 10,         # Allow temporary spikes
+    "pool_timeout": 30,         # Wait 30s for a connection
+    "pool_recycle": 1800,       # Recycle connections every 30m
+    "pool_pre_ping": True,      # Check connection health before use
+}
 if DATABASE_URL.startswith("sqlite"):
-    engine_args["connect_args"] = {"check_same_thread": False}
+    engine_args = {"connect_args": {"check_same_thread": False}}
 else:
-    # For Postgres, add pool settings and reasonable timeouts
-    engine_args.update({
-        "pool_pre_ping": True,
-        "pool_recycle": 3600,
-        "connect_args": {
-            "connect_timeout": 10
-        }
-    })
+    # Postgres specific connect args
+    engine_args["connect_args"] = {"connect_timeout": 10}
 
 try:
     print(f"DEBUG: Attempting to connect to database...")

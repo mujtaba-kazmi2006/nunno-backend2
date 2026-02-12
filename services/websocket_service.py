@@ -36,6 +36,7 @@ class BinanceWebSocketService:
         self.running = False
         self.last_broadcast: Dict[str, float] = {symbol: 0 for symbol in self.symbols}
         self.broadcast_interval = 1.0  # Minimum seconds between broadcasts per symbol
+        self._tasks: List[asyncio.Task] = []
         
         # Initialize price data structure
         for symbol in self.symbols:
@@ -53,13 +54,28 @@ class BinanceWebSocketService:
         """Start the WebSocket service"""
         self.running = True
         # Start the main connection task
-        asyncio.create_task(self._management_loop())
+        task = asyncio.create_task(self._management_loop())
+        self._tasks.append(task)
     
     async def stop(self):
         """Stop the service"""
         self.running = False
+        
+        # Stop Binance WS
         if self.binance_ws:
-            await self.binance_ws.close()
+            try:
+                await self.binance_ws.close()
+            except:
+                pass
+        
+        # Cancel all background tasks
+        for task in self._tasks:
+            if not task.done():
+                task.cancel()
+        
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._tasks.clear()
 
     async def _management_loop(self):
         """Main loop that manages connection attempts and fallbacks"""
@@ -80,7 +96,8 @@ class BinanceWebSocketService:
                 
                 logger.info(f"Attempting Binance WebSocket: {endpoint}")
                 try:
-                    async with websockets.connect(url, ping_timeout=10) as websocket:
+                    # Increased ping_timeout and interval to handle transient network lag
+                    async with websockets.connect(url, ping_interval=20, ping_timeout=20) as websocket:
                         self.binance_ws = websocket
                         logger.info(f"✅ Connected to Binance WebSocket: {endpoint}")
                         connected = True
@@ -278,8 +295,21 @@ class BinanceWebSocketService:
                     logger.error(f"Error sending initial data: {e}")
     
     async def remove_client(self, websocket):
-        """Remove a client connection"""
+        """Remove a client connection and all its subscriptions"""
         self.connected_clients.discard(websocket)
+        
+        # Also cleanup any kline subscriptions this client had
+        keys_to_delete = []
+        for key, subscribers in self.kline_subscribers.items():
+            if websocket in subscribers:
+                subscribers.discard(websocket)
+                if len(subscribers) == 0:
+                    keys_to_delete.append(key)
+        
+        for key in keys_to_delete:
+            del self.kline_subscribers[key]
+            logger.info(f"Closed kline stream for {key} (no more subscribers)")
+            
         logger.info(f"Client disconnected. Total clients: {len(self.connected_clients)}")
     
     def get_current_prices(self) -> Dict:
@@ -302,6 +332,17 @@ class BinanceWebSocketService:
         
         # Start kline stream if not already active
         await self._start_kline_stream(symbol, interval)
+
+    async def _start_kline_stream(self, symbol: str, interval: str):
+        """Start a kline stream for a specific symbol and interval"""
+        # Check if we already have a kline stream for this symbol/interval
+        key = f"{symbol}_{interval}"
+        if hasattr(self, f"_kline_ws_{key}"):
+            return  # Already running
+        
+        # Start kline WebSocket connection in a tracked task
+        task = asyncio.create_task(self._connect_to_binance_kline(symbol, interval))
+        self._tasks.append(task)
     
     async def remove_kline_client(self, websocket, symbol: str, interval: str):
         """Remove a kline client"""
@@ -311,16 +352,6 @@ class BinanceWebSocketService:
             if len(self.kline_subscribers[key]) == 0:
                 del self.kline_subscribers[key]
                 logger.info(f"Removed kline stream for {symbol} {interval}")
-    
-    async def _start_kline_stream(self, symbol: str, interval: str):
-        """Start a kline stream for a specific symbol and interval"""
-        # Check if we already have a kline stream for this symbol/interval
-        key = f"{symbol}_{interval}"
-        if hasattr(self, f"_kline_ws_{key}"):
-            return  # Already running
-        
-        # Start kline WebSocket connection
-        await self._connect_to_binance_kline(symbol, interval)
     
     async def _connect_to_binance_kline(self, symbol: str, interval: str):
         """Connect to Binance WebSocket for kline data"""
@@ -334,7 +365,8 @@ class BinanceWebSocketService:
         
         while self.running and key in self.kline_subscribers and len(self.kline_subscribers[key]) > 0:
             try:
-                async with websockets.connect(url) as websocket:
+                # Use standard keepalive settings to prevent timeout drops
+                async with websockets.connect(url, ping_interval=20, ping_timeout=20) as websocket:
                     logger.info(f"✅ Connected to Binance Kline WebSocket for {symbol} {interval}")
                     
                     async for message in websocket:

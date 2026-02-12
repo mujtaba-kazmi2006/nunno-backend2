@@ -12,6 +12,13 @@ import random
 import sys
 import os
 from fuzzywuzzy import process
+try:
+    from services.cache_service import cache_service
+except ImportError:
+    try:
+        from cache_service import cache_service
+    except ImportError:
+        cache_service = None
 
 # Filter warnings
 warnings.filterwarnings('ignore')
@@ -133,13 +140,26 @@ class TradingAnalyzer:
         raise Exception("All connection attempts failed. API may be geo-blocked or temporarily unavailable.")
     
     def fetch_binance_ohlcv_with_fallback(self, symbol="BTCUSDT", interval="15m", limit=1000):
-        """Fetch OHLCV data with multiple fallback options"""
-        
+        """Fetch OHLCV data with multiple fallback options and caching"""
+        cache_key = f"ohlcv_{symbol}_{interval}_{limit}"
+        if cache_service:
+            cached = cache_service.get(cache_key)
+            if cached:
+                # Cache stores it as a list of lists, we need to convert back to DataFrame
+                df = pd.DataFrame(cached, columns=["Open Time", "Open", "High", "Low", "Close", "Volume"])
+                df['Open Time'] = pd.to_datetime(df['Open Time'])
+                df.set_index('Open Time', inplace=True)
+                # Important: re-attach the data_source attribute
+                df.attrs['data_source'] = 'Cached Market Data'
+                return df
+
         # Method 1: Try Binance main API
         binance_url = f"https://api.binance.com/api/v3/klines?symbol={symbol.upper()}&interval={interval}&limit={limit}"
         try:
             response = self.make_request_with_fallback(binance_url)
-            return self._parse_binance_response(response.json())
+            df = self._parse_binance_response(response.json())
+            self._cache_df(cache_key, df)
+            return df
         except Exception as e:
             print(f"Binance main API failed: {str(e)}")
         
@@ -147,23 +167,37 @@ class TradingAnalyzer:
         try:
             binance_us_url = f"https://api.binance.us/api/v3/klines?symbol={symbol.upper()}&interval={interval}&limit={limit}"
             response = self.make_request_with_fallback(binance_us_url)
-            return self._parse_binance_response(response.json())
+            df = self._parse_binance_response(response.json())
+            self._cache_df(cache_key, df)
+            return df
         except Exception as e:
             print(f"Binance US API failed: {str(e)}")
         
-        # Method 3: CoinGecko fallback (different format)
+        # Method 3: CoinGecko fallback
         try:
-            # Convert symbol to CoinGecko format
             coingecko_id = self._symbol_to_coingecko_id(symbol)
             if coingecko_id:
-                return self._fetch_coingecko_data(coingecko_id, interval, limit)
+                df = self._fetch_coingecko_data(coingecko_id, interval, limit)
+                self._cache_df(cache_key, df)
+                return df
         except Exception as e:
             print(f"CoinGecko fallback failed: {str(e)}")
         
-        # Method 4: Generate synthetic data for demo purposes
-        print("All APIs failed. Generating synthetic data for demonstration...")
-        return self._generate_synthetic_data(symbol, interval, limit)
+        # Method 4: Generate synthetic data
+        print("All APIs failed. Generating synthetic data...")
+        df = self._generate_synthetic_data(symbol, interval, limit)
+        return df
     
+    def _cache_df(self, key, df):
+        """Internal helper to cache DataFrames"""
+        if cache_service and df is not None and not df.empty:
+            try:
+                cache_data = df.reset_index()
+                cache_data['Open Time'] = cache_data['Open Time'].astype(str)
+                cache_service.set(key, cache_data.values.tolist(), ttl_seconds=15)
+            except Exception as e:
+                print(f"Failed to cache DataFrame: {e}")
+
     def _parse_binance_response(self, data):
         """Parse standard Binance API response"""
         df = pd.DataFrame(data, columns=[
@@ -309,18 +343,18 @@ class TradingAnalyzer:
         """Generate realistic synthetic OHLCV data for demo purposes"""
         print(f"Generating synthetic data for {symbol} ({interval}) - {limit} candles")
         
-        # Base prices for different symbols
+        # Base prices for a plausible "2026" market era
         base_prices = {
-            "BTCUSDT": 45000,
-            "ETHUSDT": 2800,
-            "BNBUSDT": 320,
-            "ADAUSDT": 0.85,
-            "SOLUSDT": 95,
-            "XRPUSDT": 0.62,
-            "DOGEUSDT": 0.085,
-            "AVAXUSDT": 28,
-            "MATICUSDT": 0.95,
-            "DOTUSDT": 7.2
+            "BTCUSDT": 105000,
+            "ETHUSDT": 4200,
+            "BNBUSDT": 850,
+            "ADAUSDT": 1.25,
+            "SOLUSDT": 245,
+            "XRPUSDT": 1.15,
+            "DOGEUSDT": 0.28,
+            "AVAXUSDT": 65,
+            "MATICUSDT": 1.85,
+            "DOTUSDT": 14.5
         }
         
         base_price = base_prices.get(symbol.upper(), 1.0)
@@ -383,33 +417,9 @@ class TradingAnalyzer:
         return df
     
     def fetch_binance_ohlcv(self, symbol="BTCUSDT", interval="15m", limit=1000):
-        """Enhanced fetch method with comprehensive fallback system"""
-        
-        # Try multiple approaches in order of preference
-        methods = [
-            ("Direct Binance API", self._try_direct_binance),
-            ("MEXC API (Fallback)", self._try_mexc_api),
-            ("Binance with Rotation", self._try_binance_with_rotation),
-            ("Alternative APIs", self._try_alternative_apis),
-            ("Synthetic Data", self._generate_synthetic_fallback)
-        ]
-        
-        for method_name, method_func in methods:
-            try:
-                print(f"Trying {method_name}...")
-                df = method_func(symbol, interval, limit)
-                if df is not None and len(df) > 50:  # Minimum viable dataset
-                    print(f"✅ Success with {method_name}")
-                    df.attrs['data_source'] = method_name
-                    return df
-                else:
-                    print(f"❌ {method_name} returned insufficient data")
-            except Exception as e:
-                print(f"❌ {method_name} failed: {str(e)}")
-                continue
-        
-        # If all methods fail, raise an exception
-        raise Exception("All data fetching methods failed. Please check your internet connection.")
+        """Unified fetch method with caching and comprehensive fallback system"""
+        # Delegate to the cached version which has all the fallback logic
+        return self.fetch_binance_ohlcv_with_fallback(symbol, interval, limit)
     
     def _try_direct_binance(self, symbol, interval, limit):
         """Try direct Binance API call"""

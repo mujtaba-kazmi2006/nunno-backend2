@@ -63,6 +63,18 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Global Exception Handler (Unbreakable Guard)
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    import traceback
+    print(f"🔥 UNCAUGHT_CRITICAL_ERROR: {str(exc)}")
+    traceback.print_exc()
+    return json.dumps({
+        "error": "Internal Systems Disrupted",
+        "message": "Nunno's neural nodes are stabilizing. Please retry in a moment.",
+        "type": "NeuralSystemTimeout"
+    }), 500
+
 # CORS configuration for React frontend
 app.add_middleware(
     CORSMiddleware,
@@ -435,11 +447,39 @@ async def websocket_prices(websocket: WebSocket):
                 break
                 
     finally:
-        # Remove client from service
+        # Remove client from service correctly
         await websocket_service.remove_client(websocket)
-        # Also try to remove from kline subscribers if they were subscribed
-        # Note: This is a simplified cleanup, ideally we'd track both subscriptions
-        await websocket_service.remove_client(websocket)  # This removes from general client list
+        # Note: Kline unsubscription is handled internally if the client is added correctly
+
+@app.get("/api/v1/macro/summary")
+async def get_macro_summary():
+    """
+    Get a pre-synthesized macro-to-crypto intelligence summary.
+    """
+    try:
+        from duckduckgo_search import DDGS
+        with DDGS() as ddgs:
+            # High-impact macro queries
+            results = list(ddgs.text("global economy news today crypto impacts", max_results=5, timelimit='d'))
+            headlines = [r.get('title') for r in results if r.get('title')]
+        
+        # Use ChatService to create a tiny summary
+        news_context = "\n".join(headlines)
+        prompt = f"Summarize these macro headlines into 3 bullet points explaining their effect on the crypto market (Bullish/Bearish sentiment). Use elite, professional language.\n\nHeadlines:\n{news_context}"
+        
+        # Quick non-streaming call
+        response = await chat_service.client.chat.completions.create(
+            model="gpt-3.5-turbo", # Fixed small model for speed
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=200,
+            temperature=0.5
+        )
+        return {
+            "summary": response.choices[0].message.content,
+            "headlines": headlines
+        }
+    except Exception as e:
+        return {"summary": "Macro catalysts are currently stabilizing. Focus on technical liquidity zones.", "headlines": []}
 
 # ==================== REST ENDPOINTS ====================
 
@@ -531,23 +571,13 @@ async def get_price_history(ticker: str, timeframe: str = "24H"):
             "is_mock": True
         }
 
-@app.get("/api/v1/technical/{ticker}")
-async def get_technical_analysis(ticker: str, interval: str = "15m"):
-    """Get comprehensive technical analysis for a ticker"""
-    if not technical_service:
-        raise HTTPException(status_code=503, detail="Technical service unavailable")
-    try:
-        return technical_service.analyze(ticker, interval)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
 @app.get("/api/v1/simulation/scenario/{ticker}")
 async def get_simulation_scenario(ticker: str, injection_type: str, interval: str = "15m"):
     """Generate a specific injected market scenario"""
     if not technical_service:
         raise HTTPException(status_code=503, detail="Technical service unavailable")
     try:
-        return technical_service.simulate_scenario(ticker, injection_type, interval)
+        return technical_service.simulate_scenario(ticker.upper(), injection_type, interval)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -555,16 +585,11 @@ async def get_simulation_scenario(ticker: str, injection_type: str, interval: st
 async def get_monte_carlo(ticker: str, interval: str = "15m", enhanced: bool = True):
     """
     Generate Monte Carlo probability fan with enhanced features
-    
-    Args:
-        ticker: Trading pair (e.g., BTCUSDT)
-        interval: Timeframe (e.g., 15m, 1h, 4h, 1d)
-        enhanced: If True, returns comprehensive scenarios with risk metrics (default: True)
     """
     if not technical_service:
         raise HTTPException(status_code=503, detail="Technical service unavailable")
     try:
-        return technical_service.get_monte_carlo(ticker, interval, enhanced)
+        return technical_service.get_monte_carlo(ticker.upper(), interval, enhanced)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -653,15 +678,17 @@ async def feed_nunno(request: FeedNunnoRequest, current_user: User = Depends(get
                 try:
                     from duckduckgo_search import DDGS
                     with DDGS() as ddgs:
-                        queries = ["FED interest rate crypto impact", "US economy crypto regulation news"]
+                        # Broader queries for better hit rate
+                        queries = ["global crypto market news today", "FED interest rates impact crypto", "bitcoin ethereum regulation news"]
                         for query in queries:
                             results = list(ddgs.text(query, max_results=3, timelimit='d'))
                             for r in results:
                                 headlines.append({
                                     "title": r.get("title", ""),
-                                    "source": "Macro Insight",
+                                    "source": "Global Macro",
                                     "url": r.get("href", "")
                                 })
+                            if len(headlines) >= 5: break
                 except Exception as e:
                     print(f"Macro news fetch fail: {e}")
                 return headlines
@@ -697,55 +724,59 @@ async def feed_nunno(request: FeedNunnoRequest, current_user: User = Depends(get
                 stats_24h["std"] = float(df_24h['Close'].std())
 
             # Phase 4: Construct Hyper-Detailed Prompt
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Constructing Intelligence Report...'})}\n\n"
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Synthesizing Narrative Confluences...'})}\n\n"
             
-            # Format Data for Prompt
-            crypto_news_str = "\n".join([f"- {h.get('title')} ({h.get('source')})" for h in news_data.get('headlines', [])[:5]])
-            macro_news_str = "\n".join([f"- {h.get('title')}" for h in macro_headlines[:5]])
+            # Format Data for Prompt with explicit labels
+            crypto_news_list = news_data.get('headlines', [])
+            macro_news_list = macro_headlines
+            
+            crypto_news_str = "\n".join([f"- {h.get('title')} [{h.get('source')}]" for h in crypto_news_list[:5]])
+            macro_news_str = "\n".join([f"- {h.get('title')}" for h in macro_news_list[:5]])
             
             tf_details = ""
             for tf, data in multi_tf_data.items():
                 if data:
                     ind = data.get('indicators', {})
-                    tf_details += f"\n### {tf.upper()} TIMEFRAME:\n"
-                    tf_details += f"- Bias: {data.get('bias')} ({data.get('confidence')}% confidence)\n"
-                    tf_details += f"- RSI: {ind.get('rsi_14', ind.get('rsi', 'N/A'))}\n"
-                    tf_details += f"- MACD: {ind.get('macd', 'N/A')} | Signal: {ind.get('macd_signal', 'N/A')}\n"
-                    tf_details += f"- ADX: {ind.get('adx', 'N/A')} (Trend Strength)\n"
-                    tf_details += f"- Vol Ratio: {ind.get('volume_ratio', 'N/A')}x\n"
-                    tf_details += f"- Key Levels: Supp ${data.get('support_levels', ['N/A'])[0]} | Res ${data.get('resistance_levels', ['N/A'])[0]}\n"
+                    tf_details += f"\nTIME_FRAME [{tf.upper()}]:\n"
+                    tf_details += f" - BIAS: {data.get('bias')} | Confidence: {data.get('confidence')}%\n"
+                    tf_details += f" - RSI_INDEX: {ind.get('rsi_14', ind.get('rsi', 'N/A'))}\n"
+                    tf_details += f" - MACD_VAL: {ind.get('macd', 'N/A')} | MACD_SIGNAL: {ind.get('macd_signal', 'N/A')}\n"
+                    tf_details += f" - ADX_STRENGTH: {ind.get('adx', 'N/A')}\n"
+                    tf_details += f" - VOL_RATIO: {ind.get('volume_ratio', 'N/A')}x\n"
+                    tf_details += f" - LEVELS: Support ${data.get('support_levels', ['N/A'])[0]} | Resistance ${data.get('resistance_levels', ['N/A'])[0]}\n"
 
-            prompt = f"""SYSTEM: You are Nunno, a High-Tier Market Intelligence Analyst. 
-Generate a DETAILED, FACT-BASED report. No generic advice. Use exact values.
+            prompt = f"""SYSTEM: You are Nunno, an Elite Neural Analyst. 
+Generate a MARKET INTELLIGENCE BRIEFING for {request.symbol}.
 
-MARKET METRICS ({request.symbol}):
-- Price: ${curr_price:,.2f}
-- 24h High/Low: ${stats_24h['high']:,.2f} / ${stats_24h['low']:,.2f}
-- 24h Variance: {stats_24h['var']:+.2f}%
-- Volatility (STD): ${stats_24h['std']:.2f}
+STRICT REQUIREMENT: 
+Your analysis MUST lead with a synthesis of the **specific news headlines** provided below. Explain precisely how these events are creating the technical conditions shown in the data. Do not hallucinate external news.
 
-SENTIMENT:
-- Fear/Greed: {news_data.get('fear_greed_index', {}).get('value')}/100 ({news_data.get('fear_greed_index', {}).get('classification')})
-- News Bias: {news_data.get('sentiment')}
+DATA FEED:
+1. RAW ASSET STATS:
+ - Spot Price: ${curr_price:,.2f}
+ - 24h Variance: {stats_24h['var']:+.2f}%
+ - Volatility (STD): ${stats_24h['std']:.2f}
+ - Fear & Greed: {news_data.get('fear_greed_index', {}).get('value')}/100
 
-TOP MACRO NEWS:
-{macro_news_str if macro_news_str else "N/A - Monitor global liquidity."}
+2. ACTUAL NEWS HEADLINES (CRITICAL):
+{crypto_news_str if crypto_news_str else "N/A - Asset news is flat. Rely on Global Macro."}
 
-CRYPTO NEWS:
-{crypto_news_str if crypto_news_str else "N/A - Monitor on-chain flows."}
+3. GLOBAL MACRO CONTEXT:
+{macro_news_str if macro_news_str else "N/A - Monitor liquidity for catalysts."}
 
-TECHNICAL MATRIX:
+4. TECHNICAL MATRIX:
 {tf_details}
 
-OUTPUT_INSTRUCTIONS:
-1. **Macro Impact**: Start with how broad market news (FED/Economy) is affecting this specific asset.
-2. **Technical Cross-Section**: Create a MARKDOWN TABLE comparing the 4 timeframes (15m, 1h, 4h, 1d). Include columns: TF, Bias, RSI, ADX, Support, Resistance.
-3. **Indicator Deep Dive (15m)**: Detail ALL technical values for 15m. Explain RSI, MACD, and BB position specifically.
-4. **Market Temperature**: Interpret the 24h variance and volatility std dev. Is it a 'Hot', 'Stable', or 'Fragmented' market?
-5. **Key Observations**: 3-5 high-impact facts.
-6. **Strategy Note**: Suggested watch-levels based on S/R data.
+OUTPUT_NARRATIVE:
+1. **News-Technical Correlation**: Start by explicitly summarizing the **5 news headlines** listed under ACTUAL NEWS HEADLINES above. Explain how these specific events are directly influencing {request.symbol}'s current bias and creating the technical levels observed (RSI, MACD etc).
+2. **Structural Snapshot**: Provide a MARKDOWN TABLE comparing the 4 timeframes. Use the specific values provided in the DATA FEED (RSI, ADX, Support/Resistance).
+3. **Indicator Confluence**: Deep dive into the 15m/1h indicators. Explain the RSI and MACD values provided.
+4. **Market Density**: Is the market 'Chopping' or 'Rupturing'? Use the Variance and STD data to explain.
+5. **Architectural Sentiment**: 3-5 high-level tactical observations.
+6. **The Path Forward**: An executive summary on the next probable move.
 
-Be extremely detailed. Use bold headers. Stream the report now:"""
+BE DETAILED. USE PROFESSIONAL TERMINOLOGY. USE MARKDOWN.
+Stream the FULL ANALYTICAL BRIEFING now:"""
 
             # Phase 5: Stream AI Analysis
             yield f"data: {json.dumps({'type': 'status', 'message': 'Generating Final Intelligence Briefing...'})}\n\n"

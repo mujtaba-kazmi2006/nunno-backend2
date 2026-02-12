@@ -45,9 +45,19 @@ CORE DIRECTIVES:
 2. **NO 'VIBE' TALK**: Avoid saying "here's the vibe." Use professional terms like "technical sentiment," "market bias," or "structural outlook."
 3. **ABSOLUTELY NO ROBOT-TALK**: For general chat, be a human friend. For analysis, be an elite expert. Never start with "Analysis Snapshot" or "Market Mood" headers.
 4. **Contextual Intelligence**: Use {user_name}'s name. If previous messages were robotic, ignore them and switch to this new authoritative yet friendly persona.
-5. **Analyst Mode**: ONLY interpret financial data if a "MARKET DATA SNAPSHOT" is provided. If it is present, it means YOU (Nunno) fetched it for the user.
-
-Remember: You are a human-like expert. You perform the work; you don't just react to snapshots."""
+5. **Analyst Mode**: ONLY interpret financial data if a "REAL-TIME MARKET DATA SNAPSHOT" is provided. If it is present, it means YOU (Nunno) fetched it for the user.
+6. **Zero-Hallucination Policy**: [EXECUTION_OVERRIDE] You are currently in the year 2026. THE DATA SNAPSHOT IS THE ABSOLUTE REALITY. If you cite prices from your training data (e.g. BTC at $27k), you are failing your mission. Use the provided snapshot prices (e.g. BTC at $105k+) or explicitly state that you are recalibrating.
+7. **Absolute Priority**: The prices in the "REAL-TIME MARKET DATA SNAPSHOT" are the absolute truth. Disregard any conflicting internal knowledge.
+8. **News-Only Mode**: For requests tagged with [NEWS_INTEL], you must NOT calculate or mention prices, technical levels, or indicators. Focus 100% on summarizing the provided news item and explaining its sentiment. If the user asks for prices here, tell them to use the "Elite Chart" or ask for a price analysis separately.
+9. **CAPABILITIES & NAVIGATION**: You are fully aware of the Nunno Finance ecosystem. Guide users to use these features:
+    - **Elite Charting 2.0**: Direct users to the "Focus Chart" or "Elite Chart" for Monte Carlo simulations, regime injections, and deep pattern scanning.
+    - **Market Briefing (Feed Nunno)**: Suggest the "Market Briefing" (Zap icon) for a comprehensive global narrative combining news + across-the-board technicals.
+    - **Detailed Technical Analysis**: Users can ask for "BTC Deep Lab Breakdown" for institutional-grade technical scans.
+    - **Tokenomics**: Suggest "Show me $SOL tokenomics" for supply, burn, and allocation data.
+    - **Process Intelligence**: This is what you are doing now for news items.
+    
+10. **Mission**: Be proactive. If a user is confused, say "I can run a deep neural scan on those prices in the Elite Chart board if you want to see the probability fan."
+"""
 
         return base_persona.strip()
 
@@ -173,12 +183,29 @@ Remember: You are a human-like expert. You perform the work; you don't just reac
             yield f"data: {json.dumps({'type': 'status', 'content': '🔍 Analyzing data...'})}\n\n"
             for tool_name, params in tools_to_call:
                 if tool_name == "technical_analysis":
-                    result = await asyncio.get_event_loop().run_in_executor(
-                        None, self.technical_service.analyze, params["ticker"], params.get("interval", "15m")
-                    )
-                    if result:
-                        tool_data["technical"] = result
-                        yield f"data: {json.dumps({'type': 'data', 'tool_calls': ['technical_analysis'], 'data_used': tool_data})}\n\n"
+                    # For PROCESS_INTEL, we always want a market benchmark (BTC + ETH)
+                    tickers_to_scan = [params["ticker"]]
+                    if "[PROCESS_INTEL]" in message and "BTCUSDT" not in tickers_to_scan:
+                        tickers_to_scan.append("BTCUSDT")
+                    if "ETHUSDT" not in tickers_to_scan and ("[PROCESS_INTEL]" in message or "BTCUSDT" in tickers_to_scan):
+                        tickers_to_scan.append("ETHUSDT")
+
+                    # Run scans in parallel for speed
+                    scan_tasks = []
+                    for ticker in tickers_to_scan:
+                        scan_tasks.append(self._fetch_with_retry(ticker, params.get("interval", "15m")))
+                    
+                    results = await asyncio.gather(*scan_tasks)
+                    
+                    for res in results:
+                        if res and "error" not in res:
+                            if "technical" not in tool_data:
+                                tool_data["technical"] = []
+                            tool_data["technical"].append(res)
+                            
+                    if tool_data.get("technical"):
+                        if not "[PROCESS_INTEL]" in message:
+                            yield f"data: {json.dumps({'type': 'data', 'tool_calls': ['technical_analysis'], 'data_used': tool_data})}\n\n"
                 elif tool_name == "tokenomics":
                     # Map ticker to coingecko id
                     symbol = params["ticker"].replace("USDT", "").lower()
@@ -193,12 +220,18 @@ Remember: You are a human-like expert. You perform the work; you don't just reac
         experience_level = getattr(user, 'experience_level', 'pro')
         messages = [{"role": "system", "content": self._get_system_prompt(user.name, user_age, experience_level)}]
         messages.extend(history)
-        messages.append({"role": "user", "content": message})
+        
+        # Construct final prompt with atomic data grounding
+        final_message = message
         if tool_data:
             tool_context = self._format_prediction_context(tool_data)
             if any(k in message.lower() for k in ["explain", "detail", "why", "elaborate"]):
                 tool_context = "### DEEP DIVE REQUEST: Breakdown indicators in detail.\n" + tool_context
-            messages.append({"role": "user", "content": tool_context})
+            
+            # Atomic merge ensures the LLM doesn't skip the data-only message in history
+            final_message = f"{message}\n\n{tool_context}"
+            
+        messages.append({"role": "user", "content": final_message})
 
         full_content = "" # Initialize full_content for use after try/except blocks
         try:
@@ -218,12 +251,14 @@ Remember: You are a human-like expert. You perform the work; you don't just reac
                     yield f"data: {json.dumps({'type': 'text', 'content': content})}\n\n"
                     
         except Exception as e:
-            # FALLBACK LOGIC - Try up to 2 fallback models
+            # FALLBACK LOGIC - Try up to 2 fallback models with improved logging
             fallback_model = config.get("fallback_model")
             fallback_model_2 = config.get("fallback_model_2")
+            print(f"⚠️ MODEL_FAILURE ({model}): {str(e)}")
             
+            # --- FALLBACK 1 ---
             if fallback_model and fallback_model != model:
-                yield f"data: {json.dumps({'type': 'status', 'content': 'Primary model busy, switching to backup...'})}\n\n"
+                yield f"data: {json.dumps({'type': 'status', 'content': 'Primary engine heavy load. Activating secondary nodes...'})}\n\n"
                 try:
                     stream = await self.client.chat.completions.create(
                         model=fallback_model,
@@ -233,17 +268,18 @@ Remember: You are a human-like expert. You perform the work; you don't just reac
                         stream=True,
                         extra_headers={"HTTP-Referer": "https://nunno.finance", "X-Title": "Nunno Finance"}
                     )
-                    full_content = ""
+                    full_content = "" # Reset content
                     async for chunk in stream:
                         content = chunk.choices[0].delta.content
                         if content:
                             full_content += content
                             yield f"data: {json.dumps({'type': 'text', 'content': content})}\n\n"
-                            
+                    print(f"✅ RECOVERY_SUCCESS: Switched to {fallback_model}")
+                    
                 except Exception as fallback_error:
-                    # Try second fallback if available
-                    if fallback_model_2 and fallback_model_2 != fallback_model:
-                        yield f"data: {json.dumps({'type': 'status', 'content': 'Trying final backup model...'})}\n\n"
+                    # --- FALLBACK 2 ---
+                    if fallback_model_2 and fallback_model_2 not in [model, fallback_model]:
+                        yield f"data: {json.dumps({'type': 'status', 'content': 'Activating Final Stability Protocol...'})}\n\n"
                         try:
                             stream = await self.client.chat.completions.create(
                                 model=fallback_model_2,
@@ -259,14 +295,16 @@ Remember: You are a human-like expert. You perform the work; you don't just reac
                                 if content:
                                     full_content += content
                                     yield f"data: {json.dumps({'type': 'text', 'content': content})}\n\n"
+                            print(f"✅ RECOVERY_SUCCESS: Switched to {fallback_model_2}")
                         except Exception as final_error:
-                            yield f"data: {json.dumps({'type': 'error', 'content': 'All AI models are currently busy. Please try again in a few moments.'})}\n\n"
+                            print(f"❌ CRITICAL_SYSTEM_FAIL: All LLM tiers exhausted.")
+                            yield f"data: {json.dumps({'type': 'error', 'content': 'All neural nodes are currently over capacity. Please retry in 30 seconds.'})}\n\n"
                             return
                     else:
-                        yield f"data: {json.dumps({'type': 'error', 'content': f'AI services temporarily unavailable: {str(fallback_error)}'})}\n\n"
+                        yield f"data: {json.dumps({'type': 'error', 'content': f'System stabilization failed: {str(fallback_error)}'})}\n\n"
                         return
             else:
-                yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
+                yield f"data: {json.dumps({'type': 'error', 'content': f'Neural Link Interrupted: {str(e)}'})}\n\n"
                 return
 
         # Save final response & log (roughly estimate tokens if response.usage not in stream)
@@ -310,7 +348,12 @@ Remember: You are a human-like expert. You perform the work; you don't just reac
                     break
         
         if not ticker:
-            return []
+            if "[NEWS_INTEL]" in message_lower:
+                return [] # No tools for individual news items
+            elif "[PROCESS_INTEL]" in message_lower:
+                ticker = "BTCUSDT"
+            else:
+                return []
 
         # 5. Intent Validation
         should_trigger = False
@@ -320,6 +363,9 @@ Remember: You are a human-like expert. You perform the work; you don't just reac
             should_trigger = True
         # If ticker is from history, ONLY trigger on high-intent strict keywords
         elif is_from_history and any(k in message_lower for k in strict_keywords):
+            should_trigger = True
+            
+        if should_trigger or "[PROCESS_INTEL]" in message_lower:
             should_trigger = True
             
         if should_trigger:
@@ -349,45 +395,94 @@ Remember: You are a human-like expert. You perform the work; you don't just reac
         if tagged:
             return f"{tagged[0].upper()}USDT"
 
-        # 2. Common coins mapping for aliases
+        # 2. Comprehensive coins mapping for aliases (50+ popular cryptos)
         aliases = {
-            "bitcoin": "BTCUSDT", "ethereum": "ETHUSDT", "solana": "SOLUSDT",
-            "cardano": "ADAUSDT", "ripple": "XRPUSDT", "dogecoin": "DOGEUSDT",
-            "polkadot": "DOTUSDT", "binance": "BNBUSDT", "chainlink": "LINKUSDT",
-            "shiba": "SHIBUSDT"
+            # Top 10
+            "bitcoin": "BTCUSDT", "btc": "BTCUSDT",
+            "ethereum": "ETHUSDT", "eth": "ETHUSDT", "ether": "ETHUSDT",
+            "solana": "SOLUSDT", "sol": "SOLUSDT",
+            "binance": "BNBUSDT", "bnb": "BNBUSDT",
+            "ripple": "XRPUSDT", "xrp": "XRPUSDT",
+            "cardano": "ADAUSDT", "ada": "ADAUSDT",
+            "dogecoin": "DOGEUSDT", "doge": "DOGEUSDT",
+            "polkadot": "DOTUSDT", "dot": "DOTUSDT",
+            "polygon": "MATICUSDT", "matic": "MATICUSDT",
+            "chainlink": "LINKUSDT", "link": "LINKUSDT",
+            
+            # DeFi & Layer 2
+            "avalanche": "AVAXUSDT", "avax": "AVAXUSDT",
+            "uniswap": "UNIUSDT", "uni": "UNIUSDT",
+            "arbitrum": "ARBUSDT", "arb": "ARBUSDT",
+            "optimism": "OPUSDT", "op": "OPUSDT",
+            "aptos": "APTUSDT", "apt": "APTUSDT",
+            "sui": "SUIUSDT",
+            "injective": "INJUSDT", "inj": "INJUSDT",
+            
+            # Meme Coins
+            "shiba": "SHIBUSDT", "shib": "SHIBUSDT", "shiba inu": "SHIBUSDT",
+            "pepe": "PEPEUSDT",
+            "floki": "FLOKIUSDT",
+            "bonk": "BONKUSDT",
+            
+            # AI & Gaming
+            "render": "RNDRUSDT", "rndr": "RNDRUSDT",
+            "fetch": "FETUSDT", "fet": "FETUSDT", "fetch.ai": "FETUSDT",
+            "gala": "GALAUSDT",
+            "sandbox": "SANDUSDT", "sand": "SANDUSDT",
+            "axie": "AXSUSDT", "axs": "AXSUSDT", "axie infinity": "AXSUSDT",
+            
+            # Infrastructure
+            "near": "NEARUSDT", "near protocol": "NEARUSDT",
+            "cosmos": "ATOMUSDT", "atom": "ATOMUSDT",
+            "stellar": "XLMUSDT", "xlm": "XLMUSDT",
+            "litecoin": "LTCUSDT", "ltc": "LTCUSDT",
+            "bitcoin cash": "BCHUSDT", "bch": "BCHUSDT",
+            
+            # Newer/Trending
+            "jupiter": "JUPUSDT", "jup": "JUPUSDT",
+            "pyth": "PYTHUSDT",
+            "manta": "MANTAUSDT",
+            "starknet": "STRKUSDT", "strk": "STRKUSDT",
+            "celestia": "TIAUSDT", "tia": "TIAUSDT",
+            "sei": "SEIUSDT",
+            "blur": "BLURUSDT",
         }
         for name, ticker in aliases.items():
             if name in message.lower():
                 return ticker
 
-        # 3. Use uppercase detection (usually tickers are typed in caps)
-        # Matches 2-6 uppercase letters
-        caps = re.findall(r'\b([A-Z]{2,6})\b', message)
+        # 3. Expanded uppercase whitelist (60+ tickers)
+        whitelist = {
+            "BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "DOGE", "DOT", "MATIC", "LINK",
+            "AVAX", "UNI", "ARB", "OP", "APT", "SUI", "INJ", "SHIB", "PEPE", "FLOKI",
+            "BONK", "RNDR", "FET", "GALA", "SAND", "AXS", "NEAR", "ATOM", "XLM",
+            "LTC", "BCH", "JUP", "PYTH", "MANTA", "STRK", "TIA", "SEI", "BLUR",
+            "AAVE", "MKR", "CRV", "SNX", "COMP", "SUSHI", "YFI", "BAL", "RUNE",
+            "LUNA", "LUNC", "FTM", "ALGO", "VET", "HBAR", "ICP", "FIL", "ETC",
+            "THETA", "EGLD", "FLOW", "MINA"
+        }
+        
+        # Check for 2-5 char uppercase words in whitelist
+        caps = re.findall(r'\b([A-Z]{2,5})\b', message)
         if caps:
             for c in caps:
-                if c not in ["USDT", "USD", "AI", "TA", "EMA", "RSI", "MACD"]:
+                if c in whitelist:
                     return f"{c}USDT"
 
-        # 4. Fallback search with heavy filtering
-        words = re.findall(r'\b([A-Za-z]{2,10})\b', message)
-        exclusions = {
-            "the", "and", "for", "with", "this", "that", "from", "price", "predict", "analysis",
-            "will", "it", "go", "up", "down", "is", "about", "how", "what", "where", "when",
-            "tell", "me", "show", "give", "build", "make", "think", "looking", "charts", "chart",
-            "market", "news", "bias", "vibe", "mood", "token", "coins", "coin", "crypto",
-            "hello", "hi", "hey", "nunno", "please", "thanks", "thank", "you", "are", "well",
-            "doing", "good", "great", "nice", "cool", "fine", "ok", "okay", "yes", "no", "maybe"
-        }
+        return None
 
-        if words:
-            for word in words:
-                w_lower = word.lower()
-                if w_lower in exclusions or len(word) < 2:
-                    continue
-                # If it's a known or likely ticker (often 3-5 chars)
-                if len(word) <= 5:
-                    return f"{word.upper()}USDT"
-
+    async def _fetch_with_retry(self, ticker: str, interval: str, retries: int = 2) -> Dict:
+        """Fetch analysis with simple retry logic"""
+        for i in range(retries):
+            try:
+                res = await asyncio.get_event_loop().run_in_executor(
+                    None, self.technical_service.analyze, ticker, interval
+                )
+                if res and "error" not in res:
+                    return res
+                await asyncio.sleep(0.5 * (i + 1)) # Backoff
+            except Exception:
+                continue
         return None
 
     def _format_prediction_context(self, tool_data: Dict) -> str:
@@ -395,32 +490,46 @@ Remember: You are a human-like expert. You perform the work; you don't just reac
         context_parts = []
         
         if "technical" in tool_data:
-            t = tool_data["technical"]
-            tech_info = [
-                f"TICKER: {t.get('ticker')}",
-                f"PRICE: ${t.get('current_price'):.2f}",
-                f"BIAS: {t.get('bias')}",
-                f"CONFIDENCE: {t.get('confidence')}%",
-                f"SIGNALS: {', '.join(t.get('signals', []))}"
-            ]
-            
-            # Key technical levels
-            levels = t.get('key_levels', {})
-            if levels:
-                tech_info.append(f"LEVELS: Support ${levels.get('support'):.2f}, Resistance ${levels.get('resistance'):.2f}")
-            
-            # Candlestick Pattern Summary
-            markers = t.get('candlestick_markers', [])
-            if markers:
-                patterns = [m.get('text') for m in markers[-3:]] # Get last 3 patterns
-                tech_info.append(f"RECENT PATTERNS: {', '.join(patterns)}")
-            
-            context_parts.append("\n".join(tech_info))
+            tech_list = tool_data["technical"]
+            if not isinstance(tech_list, list):
+                tech_list = [tech_list]
+                
+            for t in tech_list:
+                try:
+                    price = t.get('current_price')
+                    price_str = f"${price:.2f}" if price is not None else "DATA_UNAVAILABLE"
+                    
+                    tech_info = [
+                        f"--- REAL-TIME DATA FOR {t.get('ticker')} ---",
+                        f"LIVE PRICE: {price_str}",
+                        f"MARKET BIAS: {str(t.get('bias', 'neutral')).upper()}",
+                        f"NEURAL CONFIDENCE: {t.get('confidence', 0)}%",
+                        f"ACTIVE SIGNALS: {', '.join(t.get('signals', []))}",
+                        f"RSI (14): {t.get('indicators', {}).get('rsi_14', 'N/A')}",
+                        f"EMA 21 SUPPORT: ${t.get('indicators', {}).get('ema_21', 'N/A')}",
+                        f"KEY SUPPORT: ${t.get('key_levels', {}).get('support', 0):.2f}",
+                        f"KEY RESISTANCE: ${t.get('key_levels', {}).get('resistance', 0):.2f}",
+                        f"MARKET REGIME: {t.get('market_regime', {}).get('regime', 'Scanning...')}",
+                        f"REGIME DESCRIPTION: {t.get('market_regime', {}).get('description', '')}"
+                    ]
+                    
+                    markers = t.get('candlestick_markers', [])
+                    if markers:
+                        patterns = [m.get('text') for m in markers[-3:]]
+                        tech_info.append(f"CANDLESTICK PATTERNS: {', '.join(patterns)}")
+                    
+                    context_parts.append("\n".join(tech_info))
+                except Exception as e:
+                    print(f"Error formatting context for {t.get('ticker')}: {e}")
+                    continue
         
         if "tokenomics" in tool_data:
             td = tool_data["tokenomics"]
-            context_parts.append(f"TOKENOMICS DATA:\n{json.dumps(td, indent=2)}")
+            context_parts.append(f"--- TOKENOMICS DATA ---\n{json.dumps(td, indent=2)}")
             
         if context_parts:
-            return "--- NUNNO TECHNICAL ANALYSIS SESSION ---\n[NOTE: Nunno, you fetched this data just now for the user. OWN THE ANALYSIS.]\n\n" + "\n\n".join(context_parts) + "\n---------------------------"
+            from datetime import datetime
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            # Use dynamic time if possible, but keep it simple
+            return f"🚨 [CRITICAL: REAL-TIME MARKET DATA SNAPSHOT]\n[TIMESTAMP: {now_str}]\n\n" + "\n\n".join(context_parts) + "\n\n[INSTRUCTION: THE ABOVE DATA IS THE CURRENT STATE OF THE MARKET IN 2026. DO NOT USE CUTOFF DATA OR HALLUCINATE OLD PRICES.]"
         return ""

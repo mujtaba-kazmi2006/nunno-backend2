@@ -112,12 +112,59 @@ class NewsService:
             return "Greed - People are getting excited and buying. Prices might be getting high."
         else:
             return "Extreme Greed - Everyone is very excited and buying. This can be risky (like buying something when it's most expensive)."
-    
     def _get_news_headlines(self, ticker: str):
-        """Fetch news headlines from multiple free sources"""
-        headlines = []
+        """Fetch news headlines from RSS feeds and other sources"""
+        rss_feeds = [
+            {"name": "Google News", "url": "https://news.google.com/rss/search?q=cryptocurrency+when:1d&hl=en-US&gl=US&ceid=US:en"},
+            {"name": "CoinDesk", "url": "https://www.coindesk.com/arc/outboundfeeds/rss/"},
+            {"name": "CoinTelegraph", "url": "https://cointelegraph.com/rss"}
+        ]
         
-        # Extract coin name from ticker
+        market_headlines = []
+        ticker_headlines = []
+        coin_name = ticker.replace("USDT", "").replace("USD", "").lower()
+
+        from bs4 import BeautifulSoup
+        for feed in rss_feeds:
+            try:
+                response = requests.get(feed['url'], timeout=5, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
+                if response.status_code == 200:
+                    try:
+                        soup = BeautifulSoup(response.content, 'xml')
+                    except Exception:
+                        soup = BeautifulSoup(response.content, 'html.parser')
+                    
+                    items = soup.find_all('item')[:10]
+                    for item in items:
+                        title = item.title.text if item.title else ""
+                        link = item.link.text if item.link else ""
+                        pub_date = item.pubDate.text if item.pubDate else datetime.now().isoformat()
+                        
+                        news_item = {
+                            "title": title,
+                            "source": feed['name'],
+                            "published": pub_date,
+                            "url": link
+                        }
+
+                        # Categorize: Is it specifically about our ticker or general market?
+                        if coin_name in title.lower() or ticker.lower() in title.lower():
+                            ticker_headlines.append(news_item)
+                        elif any(kw in title.lower() for kw in ["crypto", "bitcoin", "ethereum", "market", "etf", "fed"]):
+                            market_headlines.append(news_item)
+                
+                if len(ticker_headlines) >= 5: break
+            except Exception as e:
+                print(f"RSS Feed {feed['name']} failed: {e}")
+
+        # Merge: Priority to Ticker news, fill with Market news
+        headlines = (ticker_headlines + market_headlines)[:10]
+
+        if headlines:
+            print(f"✅ Found {len(headlines)} headlines from RSS (Ticker: {len(ticker_headlines)})")
+            return headlines
+
+        # 2. Fallbacks if RSS is empty...
         coin_name = ticker.replace("USDT", "").replace("USD", "").lower()
         
         # Try CryptoPanic API (free, no key needed for public endpoint)
